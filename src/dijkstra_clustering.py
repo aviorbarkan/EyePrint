@@ -9,9 +9,9 @@ import dijkstra
 def calc_plane(xyz):
     # solve: z = ax + by + c (plane)
     # np.c_ slice objects to concatenation along the second axis.
-    A = np.c_[xyz[:, 0], xyz[:, 1], np.ones(xyz.shape[0])]
+    A = np.c_[xyz[:, :-1], np.ones(xyz.shape[0])]
     # C = [a, b, c]
-    C, residuals, _, _ = np.linalg.lstsq(A, xyz[:, 2])  # coefficients (a, b, c)
+    C, residuals, _, _ = np.linalg.lstsq(A, xyz[:, -1])  # coefficients (a, b, c)
     return C, residuals
 
 def build_graph(x, data, debug=False):
@@ -24,21 +24,23 @@ def build_graph(x, data, debug=False):
         graph.add_vertex(i)
 
     # Takes 3 points so that a plane could be computed at a later stage
-    for i in range(n_points-5):
-        for j in range(i+5, n_points):
+    for i in range(n_points-6):
+        for j in range(i+6, n_points):
             xyz = np.c_[x[i:j], data[i:j]]
             C, residuals = calc_plane(xyz)
 
+            # Debug should be at max for 3d
             if debug:
                 # evaluate it on grid
                 # xx, yy = np.meshgrid(np.linspace(x[i], x[j], 10), np.linspace(data[i, 0], data[j, 0], 10))
-                xx, yy = np.meshgrid(np.linspace(0, 10, 10), np.linspace(0, 1, 10))
+                xx, yy = np.meshgrid(np.linspace(x[i] - 0.1, x[j] + 0.1, 10),
+                                     np.linspace(data[i, 0] - 0.1, data[j, 0] + 0.1, 10))
                 zz = C[0] * xx + C[1] * yy + C[2]
 
                 # plot points and fitted surface
                 fig = plt.figure()
                 ax = fig.gca(projection='3d')
-                ax.plot_surface(xx, yy, zz, rstride=1, cstride=1, alpha=0.5)
+                ax.plot_surface(xx, yy, zz, alpha=0.5)
                 ax.scatter(x, data[:, 0], data[:, 1], c='r', s=50)
                 ax.set_xlabel('X')
                 ax.set_ylabel('Y')
@@ -85,7 +87,7 @@ def get_best_division(graph, source, target):
     print('The shortest path : %s' % (path[::-1]))
     return path[::-1]
 
-def draw_division(x, y, path):
+def draw_2d_division(x, y, path):
     """
     Display a visualization of given vertices and the path 
     between them
@@ -119,7 +121,7 @@ def draw_3d_division(x, y, z, path):
         xx, yy = np.meshgrid(np.linspace(x[path[n]] - 0.1, x[path[n+1]] + 0.1, 10),
                              np.linspace(y[path[n]] - 0.1, y[path[n + 1]] + 0.1, 10),)
         zz = C[0] * xx + C[1] * yy + C[2]
-        ax.plot_surface(xx, yy, zz, rstride=1, cstride=1, alpha=0.5, color='red')
+        ax.plot_surface(xx, yy, zz, alpha=0.5, color='red')
 
     plt.show()
 
@@ -136,13 +138,16 @@ if __name__ == "__main__":
     g = np.random.random((n, 100)) * 0.3 + 0.2
     b = np.random.random((n, 100)) * 0.1 + 0.3
     # data - synthetic data representing rgb values of 100 vertices
-    data = np.vstack((r, g)).T
+    data = np.vstack((r, g, b)).T
+    # data = r[:, np.newaxis]
 
     graph = build_graph(x, data, debug=False)
 
     source = graph.get_vertex(0)
     target = graph.get_vertex(len(x) - 1)
     path = get_best_division(graph, source, target)
-    draw_3d_division(x, data[:, 0], data[:, 1], path)
-    # draw_division(x, y, path)
+    if data.shape[1] == 1:
+        draw_2d_division(x, data[:, 0], path)
+    else:
+        draw_3d_division(x, data[:, 0], data[:, 1], path)
 
