@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.optimize import leastsq
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import cv2
 from mpl_toolkits.mplot3d import Axes3D
 import dijkstra
 
@@ -14,7 +16,59 @@ def calc_plane(xyz):
     C, residuals, _, _ = np.linalg.lstsq(A, xyz[:, -1])  # coefficients (a, b, c)
     return C, residuals
 
-def build_graph(x, data, debug=False):
+def build_graph(x, y, z, debug=False):
+    # assert len(x) == data.shape[0], "Length of x must be equal to number of points in data"
+    n_points = x.shape[0]
+
+    # Build nodes
+    graph = dijkstra.Graph()
+    for i in range(n_points):
+        graph.add_vertex(i)
+
+    min_points_to_include = 50 # must be >=3
+    # Takes 3 points so that a plane could be computed at a later stage
+    for i in range(n_points-min_points_to_include):
+        print('calculating %d/%d\n' % (i, n_points - min_points_to_include))
+        for j in range(i+min_points_to_include, n_points):
+            x_vec = np.hstack(x[i:j])
+            y_vec = np.hstack(y[i:j])
+            z_vec = np.hstack(z[i:j])
+            xyz = np.c_[x_vec, y_vec, z_vec]
+            C, residuals = calc_plane(xyz)
+
+            # Debug should be at max for 3d
+            if debug:
+                # evaluate it on grid
+                # xx, yy = np.meshgrid(np.linspace(x[i], x[j], 10), np.linspace(data[i, 0], data[j, 0], 10))
+                xx, yy = np.meshgrid(np.linspace(x[i] - 0.1, x[j] + 0.1, 10),
+                                     np.linspace(data[i, 0] - 0.1, data[j, 0] + 0.1, 10))
+                zz = C[0] * xx + C[1] * yy + C[2]
+
+                # plot points and fitted surface
+                fig = plt.figure()
+                ax = fig.gca(projection='3d')
+                ax.plot_surface(xx, yy, zz, alpha=0.5)
+                ax.scatter(x, data[:, 0], data[:, 1], c='r', s=50)
+                ax.set_xlabel('X')
+                ax.set_ylabel('Y')
+                ax.set_zlabel('Z')
+                ax.axis('equal')
+                ax.axis('tight')
+                plt.show()
+
+            graph.add_edge(i, j, residuals)
+    return graph
+
+
+def generalized_build_graph(x, data, debug=False):
+    """
+    generalized case for n dimensions, each vertex x has only
+    one unique value of data
+    :param x: 
+    :param data: 
+    :param debug: 
+    :return: 
+    """
     assert len(x) == data.shape[0], "Length of x must be equal to number of points in data"
     n_points = data.shape[0]
 
@@ -23,9 +77,11 @@ def build_graph(x, data, debug=False):
     for i in range(n_points):
         graph.add_vertex(i)
 
+    min_points_to_include = 5 # must be >=3
     # Takes 3 points so that a plane could be computed at a later stage
-    for i in range(n_points-6):
-        for j in range(i+6, n_points):
+    for i in range(n_points-min_points_to_include):
+        print('calculating %d/%d\n' %(i, n_points-min_points_to_include))
+        for j in range(i+min_points_to_include, n_points):
             xyz = np.c_[x[i:j], data[i:j]]
             C, residuals = calc_plane(xyz)
 
@@ -126,28 +182,63 @@ def draw_3d_division(x, y, z, path):
     plt.show()
 
 if __name__ == "__main__":
-    n=1
-    # Create synthetic data points for the graph
-    x = np.arange(0, 100)
-    r1 = np.random.random(20)*0.1
-    r2 = np.random.random(30)*0.2 + 0.5
-    r3 = np.random.random(15)*0.7
-    r4 = np.random.random(35)*0.4*np.linspace(0, 1, 35)
-    r = np.concatenate((r1, r2, r3, r4))
-    # g = r.copy()
-    g = np.random.random((n, 100)) * 0.3 + 0.2
-    b = np.random.random((n, 100)) * 0.1 + 0.3
-    # data - synthetic data representing rgb values of 100 vertices
-    data = np.vstack((r, g, b)).T
-    # data = r[:, np.newaxis]
+    old_ver = False
+    print_path = False
+    if old_ver:
+        n=1
+        # Create synthetic data points for the graph
+        x = np.arange(0, 100)
+        r1 = np.random.random(20)*0.1
+        r2 = np.random.random(30)*0.2 + 0.5
+        r3 = np.random.random(15)*0.7
+        r4 = np.random.random(35)*0.4*np.linspace(0, 1, 35)
+        r = np.concatenate((r1, r2, r3, r4))
+        # g = r.copy()
+        g = np.random.random((n, 100)) * 0.3 + 0.2
+        b = np.random.random((n, 100)) * 0.1 + 0.3
+        # data - synthetic data representing rgb values of 100 vertices
+        # data = np.vstack((r, g, b)).T
+        data = np.vstack((r, g)).T
+        # data = np.random.random((2, 100)).T
+        # data = r[:, np.newaxiss]
 
-    graph = build_graph(x, data, debug=False)
+        graph = generalized_build_graph(x, data, debug=False)
+
+    else:
+        input = cv2.imread(r'../images/medium_input.png')
+        gray_input = cv2.cvtColor(input, cv2.COLOR_BGR2GRAY)
+        y_size, x_size = gray_input.shape
+        x = np.arange(0, x_size)
+        x = np.tile(x[:, np.newaxis], y_size)
+        y = np.arange(0, y_size)
+        y = np.tile(y[:, np.newaxis], x_size).T
+        z = gray_input.T
+        # data = np.vstack((y, z)).T
+
+
+        graph = build_graph(x, y, z, debug=False)
 
     source = graph.get_vertex(0)
     target = graph.get_vertex(len(x) - 1)
     path = get_best_division(graph, source, target)
-    if data.shape[1] == 1:
-        draw_2d_division(x, data[:, 0], path)
-    else:
-        draw_3d_division(x, data[:, 0], data[:, 1], path)
+
+    if print_path:
+        if data.shape[1] == 1:
+            draw_2d_division(x, data[:, 0], path)
+        else:
+            draw_3d_division(x, data[:, 0], data[:, 1], path)
+
+    # print the division on the image
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.imshow(input)
+    # y_path = np.ones(x[path].shape) * y_size
+    # ax.bar(x[path], y_path, '.-', color='green')
+    for i in path:
+        rect = patches.Rectangle((i, 0), 1, y_size, linewidth=1, edgecolor='r', facecolor='none')
+        # Add the patch to the Axes
+        ax.add_patch(rect)
+
+    plt.show()
+
 
