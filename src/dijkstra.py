@@ -11,6 +11,7 @@ class Vertex:
         self.visited = False
         # Predecessor
         self.previous = None
+        self.num_of_nodes = 0
 
     def add_neighbor(self, neighbor, weight=0):
         self.adjacent[neighbor] = weight
@@ -104,6 +105,7 @@ def dijkstra(aGraph, start):
     print('''Dijkstra's shortest path''')
     # Set the distance for the start node to zero
     start.set_distance(0)
+    penalty = aGraph.num_vertices**2
 
     # Put tuple pair into the priority queue
     unvisited_queue = [(v.get_distance(), v) for v in aGraph]
@@ -120,18 +122,19 @@ def dijkstra(aGraph, start):
             # if visited, skip
             if next.visited:
                 continue
-            new_dist = current.get_distance() + current.get_weight(next)
+            new_dist = current.get_distance() + current.get_weight(next) + (current.num_of_nodes * penalty)
 
             if new_dist < next.get_distance():
                 next.set_distance(new_dist)
                 next.set_previous(current)
-                print
-                'updated : current = %s next = %s new_dist = %s' \
-                % (current.get_id(), next.get_id(), next.get_distance())
+                next.num_of_nodes = current.num_of_nodes + 1
+                print('updated : current = %s next = %s new_dist = %s' % (current.get_id(),
+                                                                          next.get_id(),
+                                                                          next.get_distance()))
             else:
-                print
-                'not updated : current = %s next = %s new_dist = %s' \
-                % (current.get_id(), next.get_id(), next.get_distance())
+                print('not updated : current = %s next = %s new_dist = %s' % (current.get_id(),
+                                                                              next.get_id(),
+                                                                              next.get_distance()))
 
         # Rebuild heap
         # 1. Pop every item
