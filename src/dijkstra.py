@@ -1,9 +1,12 @@
 import sys
 import heapq
+import numpy as np
+
 
 class Vertex:
     def __init__(self, node):
         self.id = node
+        self.neighbors = []
         self.adjacent = {}
         # Set distance to infinity for all nodes
         self.distance = sys.maxsize
@@ -14,6 +17,7 @@ class Vertex:
         self.num_of_nodes = 0
 
     def add_neighbor(self, neighbor, weight=0):
+        self.neighbors.append(neighbor.id)
         self.adjacent[neighbor] = weight
 
     def get_connections(self):
@@ -105,7 +109,7 @@ def dijkstra(aGraph, start):
     print('''Dijkstra's shortest path''')
     # Set the distance for the start node to zero
     start.set_distance(0)
-    penalty = aGraph.num_vertices**2
+    penalty = aGraph.num_vertices ** 2
 
     # Put tuple pair into the priority queue
     unvisited_queue = [(v.get_distance(), v) for v in aGraph]
@@ -122,7 +126,8 @@ def dijkstra(aGraph, start):
             # if visited, skip
             if next.visited:
                 continue
-            new_dist = current.get_distance() + current.get_weight(next) + (current.num_of_nodes * penalty)
+            new_dist = current.get_distance() + current.get_weight(next)
+            # + (current.num_of_nodes * penalty)
 
             if new_dist < next.get_distance():
                 next.set_distance(new_dist)
@@ -145,37 +150,120 @@ def dijkstra(aGraph, start):
         heapq.heapify(unvisited_queue)
 
 
+def shortest_path(graph, src_node, target_node, path_length):
+    v = graph.num_vertices
+    if path_length == 0:
+        if src_node.id == target_node.id:
+            return [src_node.id, target_node.id]
+        else:
+            return np.inf
+
+    weights = np.ones((v, v, path_length + 1)) * np.inf
+    sp = np.empty_like(weights, dtype=object)
+    # Init path in length 1
+    for vertex_num in range(v):
+        vertex = graph.get_vertex(vertex_num)
+        for neighbour_num in range(v):
+            neighbour = graph.get_vertex(neighbour_num)
+            sp[vertex_num, neighbour_num, 1] = [vertex_num, neighbour_num]
+
+            if vertex_num == neighbour_num:
+                weights[vertex_num, neighbour_num, 1] = np.inf
+            else:
+                weights[vertex_num, neighbour_num, 1] = vertex.get_weight(neighbour)
+
+    # Compute shortest path in length <= path_length
+    for e in range(2, path_length + 1):
+        print("calculating path in length %d" % e)
+        for i in range(v):
+            cur_src = graph.get_vertex(i)
+            for j in range(i+1, v):
+                cur_target = graph.get_vertex(j)
+                for k in range(i+1, j):
+                    cur_node = graph.get_vertex(k)
+                    if (cur_src.get_weight(cur_node) != np.inf and
+                        cur_src.id != cur_node.id and cur_target.id != cur_node.id and
+                        weights[k, j, e - 1] != np.inf):
+
+                        new_weight = cur_src.get_weight(cur_node) + weights[k, j, e - 1]
+                        if new_weight < weights[i, j, e]:
+                            weights[i, j, e] = new_weight
+                            sp[i, j, e] = [i] + [k] + sp[i, j, e-1][1:-1] + [j]
+                            cur_node.set_previous(cur_src)
+                            cur_target.set_previous(cur_node)
+
+    path = np.sort(sp[src_node.id, target_node.id, path_length])
+    # return weights[src_node.id, target_node.id, path_length], path
+    return path
+
+
+
 if __name__ == '__main__':
 
     g = Graph()
+    for i in range(4):
+        g.add_vertex(i)
 
-    g.add_vertex('a')
-    g.add_vertex('b')
-    g.add_vertex('c')
-    g.add_vertex('d')
-    g.add_vertex('e')
-    g.add_vertex('f')
+    g.add_edge(0, 0, 0)
+    g.add_edge(0, 1, 10)
+    g.add_edge(0, 2, 3)
+    g.add_edge(0, 3, 2)
+    g.add_edge(0, 4, np.inf)
+    g.add_edge(1, 0, np.inf)
+    g.add_edge(1, 1, 0)
+    g.add_edge(1, 2, 5)
+    g.add_edge(1, 3, 1)
+    g.add_edge(1, 4, np.inf)
+    g.add_edge(2, 0, np.inf)
+    g.add_edge(2, 1, np.inf)
+    g.add_edge(2, 2, 0)
+    g.add_edge(2, 3, 6)
+    g.add_edge(2, 4, np.inf)
+    g.add_edge(3, 0, np.inf)
+    g.add_edge(3, 1, np.inf)
+    g.add_edge(3, 2, np.inf)
+    g.add_edge(3, 3, 0)
+    g.add_edge(3, 4, 2)
+    g.add_edge(4, 0, np.inf)
+    g.add_edge(4, 1, np.inf)
+    g.add_edge(4, 2, np.inf)
+    g.add_edge(4, 3, np.inf)
+    g.add_edge(4, 4, 0)
 
-    g.add_edge('a', 'b', 7)
-    g.add_edge('a', 'c', 9)
-    g.add_edge('a', 'f', 14)
-    g.add_edge('b', 'c', 10)
-    g.add_edge('b', 'd', 15)
-    g.add_edge('c', 'd', 11)
-    g.add_edge('c', 'f', 2)
-    g.add_edge('d', 'e', 6)
-    g.add_edge('e', 'f', 9)
 
-    print('Graph data:')
-    for v in g:
-        for w in v.get_connections():
-            vid = v.get_id()
-            wid = w.get_id()
-            print('( %s , %s, %3d)' % (vid, wid, v.get_weight(w)))
+    w, p = shortest_path(g, g.get_vertex(0), g.get_vertex(4), 3)
+    print(w)
+    print(p)
 
-    dijkstra(g, g.get_vertex('a'))
-
-    target = g.get_vertex('e')
-    path = [target.get_id()]
-    shortest(target, path)
-    print('The shortest path : %s' % (path[::-1]))
+    # g = Graph()
+    #
+    # g.add_vertex('a')
+    # g.add_vertex('b')
+    # g.add_vertex('c')
+    # g.add_vertex('d')
+    # g.add_vertex('e')
+    # g.add_vertex('f')
+    #
+    # g.add_edge('a', 'b', 7)
+    # g.add_edge('a', 'c', 9)
+    # g.add_edge('a', 'f', 14)
+    # g.add_edge('b', 'c', 10)
+    # g.add_edge('b', 'd', 15)
+    # g.add_edge('c', 'd', 11)
+    # g.add_edge('c', 'f', 2)
+    # g.add_edge('d', 'e', 6)
+    # g.add_edge('e', 'f', 9)
+    #
+    # print('Graph data:')
+    # for v in g:
+    #     for w in v.get_connections():
+    #         vid = v.get_id()
+    #         wid = w.get_id()
+    #         print('( %s , %s, %3d)' % (vid, wid, v.get_weight(w)))
+    #
+    # dijkstra(g, g.get_vertex('a'))
+    #
+    # target = g.get_vertex('e')
+    # path = [target.get_id()]
+    # shortest(target, path)
+    # print('The shortest path : %s' % (path[::-1]))

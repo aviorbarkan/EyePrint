@@ -30,6 +30,13 @@ def build_graph(img, valid_mask, debug=False):
     # Takes 3 points so that a plane could be computed at a later stage
     for x_start in range(n_points - min_points_to_include):
         print('calculating %d/%d' % (x_start, n_points - min_points_to_include-1))
+
+        graph.add_edge(x_start, x_start, 0)
+
+        for x_end in range(x_start+1, x_start + min_points_to_include):
+            graph.add_edge(x_start, x_end, np.inf)
+            graph.add_edge(x_end, x_start, np.inf)
+
         for x_end in range(x_start + min_points_to_include, n_points):
             cur_valid_mask = valid_mask[:, x_start:x_end]
             x_vec = xx[:, x_start:x_end][cur_valid_mask]
@@ -58,6 +65,14 @@ def build_graph(img, valid_mask, debug=False):
                 plt.show()
 
             graph.add_edge(x_start, x_end, residuals)
+            graph.add_edge(x_end, x_start, np.inf)
+
+    for x_start in range(n_points - min_points_to_include, n_points):
+        graph.add_edge(x_start, x_start, 0)
+        for x_end in range(x_start + 1, n_points):
+            graph.add_edge(x_start, x_end, np.inf)
+            graph.add_edge(x_end, x_start, np.inf)
+
     return graph
 
 
@@ -134,7 +149,7 @@ if __name__ == "__main__":
     gray_input = True
 
     im_rgb = cv2.imread(r'../images/input.png')
-    im_gray =  cv2.cvtColor(im_rgb, cv2.COLOR_BGR2GRAY)
+    im_gray = cv2.cvtColor(im_rgb, cv2.COLOR_BGR2GRAY)
     if gray_input:
         input_img = im_gray
         valid_mask = input_img < 255
@@ -146,7 +161,11 @@ if __name__ == "__main__":
 
     source = graph.get_vertex(0)
     target = graph.get_vertex(im_rgb.shape[1] - 1)
-    path = get_best_division(graph, source, target)
+    # new code for shortest path with exactly k edges
+    path = dijkstra.shortest_path(graph, source, target, 5)
+    print(path)
+    # dijkstra old code
+    # path = get_best_division(graph, source, target)
 
     if print_path:
         draw_3d_division(im_gray, valid_mask, path)
@@ -157,10 +176,7 @@ if __name__ == "__main__":
     ax.imshow(im_rgb)
     # y_path = np.ones(x[path].shape) * y_size
     # ax.bar(x[path], y_path, '.-', color='green')
-    for i in path:
-        rect = patches.Rectangle((i, 0), 1, im_rgb.shape[0], linewidth=1, edgecolor='r', facecolor='none')
-        # Add the patch to the Axes
-        ax.add_patch(rect)
+    ax.vlines(path, ymin=0, ymax=im_rgb.shape[0], color='red')
 
     plt.show()
 
