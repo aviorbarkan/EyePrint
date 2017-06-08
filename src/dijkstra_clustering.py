@@ -136,7 +136,7 @@ def draw_3d_division(img, valid_mask, path):
     plt.show()
 
 
-def find_line(first_point, second_point, debug = False):
+def find_line(first_point, second_point):
     # find line equation y=ax+b
     delta_x = np.float32(second_point[0])-np.float32(first_point[0])
     delta_y = np.float32(second_point[1])-np.float32(first_point[1])
@@ -144,6 +144,22 @@ def find_line(first_point, second_point, debug = False):
     b = first_point[1]-a*first_point[0]
 
     return a, b
+
+
+def draw_lines(points_list, connect_first_and_last=False):
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    for i in range(len(points_list)-1):
+        p1 = points_list[i]
+        p2 = points_list[i+1]
+        plt.plot([p1[0], p2[0]], [p1[1], p2[1]])
+
+    if connect_first_and_last:
+        plt.plot([points_list[0][0], points_list[-1][0]], [points_list[0][1], points_list[-1][1]])
+
+    ax.set_xlabel('Number of divisions')
+    ax.set_ylabel('Error')
+    plt.show()
 
 def dist_from_line(a,b, point):
     # returns the distance of a point from a line with given a and b (y=ax+b)
@@ -155,9 +171,9 @@ def dist_from_line(a,b, point):
 
 def find_optimal_divisions_num(graph, source, target):
     # find f(1) and f(n)
-    _, f_one = dijkstra.shortest_path(graph, source, target, 1)
+    _, f_one, _, _ = dijkstra.shortest_path(graph, source, target, 1)
     print(f_one)
-    _, f_n = dijkstra.shortest_path(graph, source, target, target.id)
+    _, f_n, all_weights, all_sp = dijkstra.shortest_path(graph, source, target, target.id)
     print(f_n)
 
     # find the line that go through (1,f(1)) and (n,f(n))
@@ -167,30 +183,60 @@ def find_optimal_divisions_num(graph, source, target):
     low = 1
     high = target.id
 
-    while low != high:
+    optimal_division = 0
+    optimal_division_dist = 0
+    points_list = []
+    points_list.append((1, f_one))
+    while low < high:
         k = int((float(high) + float(low))/2.0)
         k_neighbour = k+1
-        print(k)
-        _, f_k = dijkstra.shortest_path(graph, source, target, k)
-        _, f_k_neighbour = dijkstra.shortest_path(graph, source, target, k_neighbour)
+        print("low = %d, k = %d, high = %d" % (low, k, high))
+        # Get error for k divisions and k+1 divisions
+        _, f_k, _, _ = dijkstra.shortest_path(graph, source, target, k,  all_weights, all_sp)
+        _, f_k_neighbour, _, _ = dijkstra.shortest_path(graph, source, target, k_neighbour, all_weights, all_sp)
 
         dist_k = dist_from_line(a, b, (k, f_k))
         dist_k_neighbour = dist_from_line(a, b, (k_neighbour, f_k_neighbour))
 
+        # binary search should go left
         if dist_k > dist_k_neighbour:
-            high = k
+            if optimal_division_dist > dist_k:
+                if optimal_division > k:
+                    # local maximum, ignore and go right
+                    low = k_neighbour
+                else:
+                    high = k
+            else:
+                optimal_division = k
+                optimal_division_dist = dist_k
+                high = k
+
+        # binary search should go right
         else:
-            low = k_neighbour
-    print(k)
+            if optimal_division_dist > dist_k:
+                if optimal_division < k:
+                    # local maximum, ignore and go left
+                    high = k
+                else:
+                    low = k_neighbour
+            else:
+                optimal_division = k
+                optimal_division_dist = dist_k
+                low = k
 
-    return k
+        points_list.append((k, f_k))
 
+    points_list.append((target.id, f_n))
+    points_list.sort(key=lambda tup: tup[0])
+    print("optimal division: k=%d" % k)
+    draw_lines(points_list, connect_first_and_last=True)
+    return optimal_division, all_weights, all_sp
 
 if __name__ == "__main__":
     print_path = True
-    gray_input = True
+    gray_input = False
 
-    im_rgb = cv2.imread(r'../images/tiny_input.png')
+    im_rgb = cv2.imread(r'../images/input.png')
     im_gray = cv2.cvtColor(im_rgb, cv2.COLOR_BGR2GRAY)
 
     if gray_input:
@@ -203,23 +249,16 @@ if __name__ == "__main__":
         resized = cv2.resize(im_gray, dim, interpolation=cv2.INTER_AREA)
         input_img = resized
 
-    valid_mask = input_img < 255
-
-
-    # if gray_input:
-    #     input_img = im_gray
-    #     valid_mask = input_img < 255
-    # else:
-    #     input_img = cv2.cvtColor(im_rgb, cv2.COLOR_BGR2HSV)[:, :, 0]
-    #     valid_mask = input_img > 0
+    valid_mask = input_img < 230
+    orig_valid_mask = im_gray < 230
 
     graph = build_graph(input_img, valid_mask, debug=False)
 
     source = graph.get_vertex(0)
     target = graph.get_vertex(input_img.shape[1] - 1)
     # new code for shortest path with exactly k edges
-    division_num = find_optimal_divisions_num(graph, source, target)
-    path, sp_weight = dijkstra.shortest_path(graph, source, target, division_num)
+    division_num, all_weights, all_sp = find_optimal_divisions_num(graph, source, target)
+    path, sp_weight, _, _ = dijkstra.shortest_path(graph, source, target, division_num,  all_weights, all_sp)
     print(path)
     if gray_input:
         orig_path = path
@@ -240,7 +279,7 @@ if __name__ == "__main__":
     plt.show()
 
     if print_path:
-        draw_3d_division(im_gray, valid_mask, path)
+        draw_3d_division(im_gray, orig_valid_mask, orig_path)
 
 
 

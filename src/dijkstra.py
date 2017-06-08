@@ -150,7 +150,7 @@ def dijkstra(aGraph, start):
         heapq.heapify(unvisited_queue)
 
 
-def shortest_path(graph, src_node, target_node, path_length):
+def shortest_path(graph, src_node, target_node, path_length, given_weights=None, given_sp=None):
     # TODO: optimize for multiple runnins of the same graph but different divisions
     v = graph.num_vertices
     if path_length == 0:
@@ -161,20 +161,30 @@ def shortest_path(graph, src_node, target_node, path_length):
 
     weights = np.ones((v, v, path_length + 1)) * np.inf
     sp = np.empty_like(weights, dtype=object)
-    # Init path in length 1
-    for vertex_num in range(v):
-        vertex = graph.get_vertex(vertex_num)
-        for neighbour_num in range(v):
-            neighbour = graph.get_vertex(neighbour_num)
-            sp[vertex_num, neighbour_num, 1] = [vertex_num, neighbour_num]
+    if given_weights is None or given_sp is None:
+        e_init = 2
+        # Init path in length 1
+        for vertex_num in range(v):
+            vertex = graph.get_vertex(vertex_num)
+            for neighbour_num in range(v):
+                neighbour = graph.get_vertex(neighbour_num)
+                sp[vertex_num, neighbour_num, 1] = [vertex_num, neighbour_num]
 
-            if vertex_num == neighbour_num:
-                weights[vertex_num, neighbour_num, 1] = np.inf
-            else:
-                weights[vertex_num, neighbour_num, 1] = vertex.get_weight(neighbour)
+                if vertex_num == neighbour_num:
+                    weights[vertex_num, neighbour_num, 1] = np.inf
+                else:
+                    weights[vertex_num, neighbour_num, 1] = vertex.get_weight(neighbour)
+    else:
+        e_init = given_weights.shape[2]
+        if given_weights.shape[2] <= path_length:
+            weights[:, :, :given_weights.shape[2]] = given_weights
+            sp[:, :, :given_sp.shape[2]] = given_sp
+        else:
+            weights = given_weights
+            sp = given_sp
 
     # Compute shortest path in length <= path_length
-    for e in range(2, path_length + 1):
+    for e in range(e_init, path_length + 1):
         print("calculating path in length %d" % e)
         for i in range(v):
             cur_src = graph.get_vertex(i)
@@ -195,7 +205,7 @@ def shortest_path(graph, src_node, target_node, path_length):
     path = np.sort(sp[src_node.id, target_node.id, path_length])
     sp_weight = weights[src_node.id, target_node.id, path_length]
     # return weights[src_node.id, target_node.id, path_length], path
-    return path, sp_weight
+    return path, sp_weight, weights, sp
 
 
 
