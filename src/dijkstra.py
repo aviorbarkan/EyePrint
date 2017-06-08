@@ -151,6 +151,7 @@ def dijkstra(aGraph, start):
 
 
 def shortest_path(graph, src_node, target_node, path_length):
+    # TODO: optimize for multiple runnins of the same graph but different divisions
     v = graph.num_vertices
     if path_length == 0:
         if src_node.id == target_node.id:
@@ -184,17 +185,17 @@ def shortest_path(graph, src_node, target_node, path_length):
                     if (cur_src.get_weight(cur_node) != np.inf and
                         cur_src.id != cur_node.id and cur_target.id != cur_node.id and
                         weights[k, j, e - 1] != np.inf):
-
                         new_weight = cur_src.get_weight(cur_node) + weights[k, j, e - 1]
                         if new_weight < weights[i, j, e]:
                             weights[i, j, e] = new_weight
-                            sp[i, j, e] = [i] + [k] + sp[i, j, e-1][1:-1] + [j]
+                            sp[i, j, e] = [i] + [k] + sp[k, j, e-1][1:-1] + [j]
                             cur_node.set_previous(cur_src)
                             cur_target.set_previous(cur_node)
 
     path = np.sort(sp[src_node.id, target_node.id, path_length])
+    sp_weight = weights[src_node.id, target_node.id, path_length]
     # return weights[src_node.id, target_node.id, path_length], path
-    return path
+    return path, sp_weight
 
 
 
