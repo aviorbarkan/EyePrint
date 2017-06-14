@@ -169,6 +169,7 @@ def dist_from_line(a,b, point):
 
     return d
 
+
 def find_optimal_divisions_num(graph, source, target):
     # find f(1) and f(n)
     _, f_one, _, _ = dijkstra.shortest_path(graph, source, target, 1)
@@ -185,6 +186,8 @@ def find_optimal_divisions_num(graph, source, target):
 
     optimal_division = 0
     optimal_division_dist = 0
+    optimal_division_error = 0
+    optimal_path = []
     points_list = []
     points_list.append((1, f_one))
     while low < high:
@@ -192,8 +195,8 @@ def find_optimal_divisions_num(graph, source, target):
         k_neighbour = k+1
         print("low = %d, k = %d, high = %d" % (low, k, high))
         # Get error for k divisions and k+1 divisions
-        _, f_k, _, _ = dijkstra.shortest_path(graph, source, target, k,  all_weights, all_sp)
-        _, f_k_neighbour, _, _ = dijkstra.shortest_path(graph, source, target, k_neighbour, all_weights, all_sp)
+        path_k, f_k, _, _ = dijkstra.shortest_path(graph, source, target, k,  all_weights, all_sp)
+        path_k_neighbour, f_k_neighbour, _, _ = dijkstra.shortest_path(graph, source, target, k_neighbour, all_weights, all_sp)
 
         dist_k = dist_from_line(a, b, (k, f_k))
         dist_k_neighbour = dist_from_line(a, b, (k_neighbour, f_k_neighbour))
@@ -209,6 +212,8 @@ def find_optimal_divisions_num(graph, source, target):
             else:
                 optimal_division = k
                 optimal_division_dist = dist_k
+                optimal_division_error = f_k
+                optimal_path = path_k
                 high = k
 
         # binary search should go right
@@ -222,6 +227,8 @@ def find_optimal_divisions_num(graph, source, target):
             else:
                 optimal_division = k
                 optimal_division_dist = dist_k
+                optimal_division_error = f_k
+                optimal_path = path_k
                 low = k
 
         points_list.append((k, f_k))
@@ -230,16 +237,92 @@ def find_optimal_divisions_num(graph, source, target):
     points_list.sort(key=lambda tup: tup[0])
     print("optimal division: k=%d" % k)
     draw_lines(points_list, connect_first_and_last=True)
-    return optimal_division, all_weights, all_sp
+    return optimal_division, optimal_path, optimal_division_error
 
-if __name__ == "__main__":
-    print_path = True
-    gray_input = False
+def img_to_sectors(img, center, radius, num_sectors=10, plot_debug=False):
+    """
+    :param img: 2D grayscale image, uint8.
+    :param center: Tuple (x,y)
+    :param radius: radius in pixels
+    :param num_sectors: Number of sectors
+    :param plot_debug: plots all sectors
+    :return: list of dictonary items. Each item contains:
+        - 'img_sector_rotated': Image of the valid sector, after rotation
+        - 'mask_rotated': valid mask, after rotation
+        - 'img_sector': Image of the valid sector, before rotation
+        - 'mask': valid mask, before rotation
+        - 'ang1': Start angle, in radians
+        - 'ang2': End angle, in radians
+        - 'ang_center': Center angle, in radians
+    """
+    # Creating grid of polar coordinates
+    uu, vv = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
+    xx = uu - center[0]
+    yy = vv - center[1]
+    rr = np.sqrt(xx**2 + yy**2)
+    theta = -1*np.arctan2(yy, xx)
+    theta[theta < 0] = theta[theta < 0] + 2*np.pi
+    mask_radius = rr < radius
 
-    im_rgb = cv2.imread(r'../images/input.png')
-    im_gray = cv2.cvtColor(im_rgb, cv2.COLOR_BGR2GRAY)
+    # Creating sectors
+    angles = np.linspace(0, np.pi * 2, num_sectors + 1)
+    result = []
+    for ind in range(1, len(angles)):
+        ang1 = angles[ind-1]
+        ang2 = angles[ind]
+        mask_angle = np.logical_and(theta > ang1, theta < ang2)
+        mask = np.logical_and(mask_radius, mask_angle)
+        img_sector = img*mask
+        ang = (ang2 + ang1) / 2.0
+        M = cv2.getRotationMatrix2D(center, -ang*180/np.pi, 1.0)
+        img_sector_rotated = cv2.warpAffine(img_sector, M, (img.shape[1], img.shape[0]))
+        mask_rotated = cv2.warpAffine(mask.astype(np.uint8)*255, M, (img.shape[1], img.shape[0]))
+        mask_rotated = mask_rotated > 127
+        result.append({'img_sector_rotated': img_sector_rotated,
+                       'mask_rotated': mask_rotated,
+                       'img_sector': img_sector,
+                       'mask': mask,
+                       'ang1': ang1,
+                       'ang2': ang2,
+                       'ang_center': ang})
+    if plot_debug:
+        for sector in result:
+            fig = plt.figure()
+            ax = fig.add_subplot(1, 2, 1)
+            ax.imshow(sector['img_sector'], cmap='gray')
+            ax.set_title("Sector %d | Angle between (%.2f, %.2f)" % (ind, ang1, ang2))
+            ax = fig.add_subplot(1, 2, 2)
+            ax.imshow(sector['img_sector_rotated'], cmap='gray')
+            ax.set_title("Rotated Sector")
+        plt.show()
 
-    if gray_input:
+    return result
+
+    # slices = []
+    # optimal_slices_division = 0
+    # optimal_division_error = 0
+    #
+    # # num_of_slices
+    # img_debug = img.copy()
+    # cv2.circle(img_debug, center, radius, [100, 255, 255], 3)
+    # cv2.circle(img_debug, center, 1, [0, 255, 0], 2)
+    #
+    # fig = plt.figure()
+    # ax = fig.add_subplot(1, 1, 1)
+    # ax.imshow(img_debug)
+    #
+    # division_error = 0
+    # for slice_img in slices:
+    #     slice_path, slice_error = get_slice_partition(slice_img)
+    #     division_error = division_error + slice_error
+
+
+def get_slice_partition(im_rgb, display=False):
+    original_size = False
+    im_gray = im_rgb.copy()
+    im_gray = cv2.cvtColor(im_gray, cv2.COLOR_BGR2GRAY)
+
+    if original_size:
         input_img = im_gray
     else:
         width = 200
@@ -257,29 +340,40 @@ if __name__ == "__main__":
     source = graph.get_vertex(0)
     target = graph.get_vertex(input_img.shape[1] - 1)
     # new code for shortest path with exactly k edges
-    division_num, all_weights, all_sp = find_optimal_divisions_num(graph, source, target)
-    path, sp_weight, _, _ = dijkstra.shortest_path(graph, source, target, division_num,  all_weights, all_sp)
+    division_num, path, division_error = find_optimal_divisions_num(graph, source, target)
     print(path)
-    if gray_input:
+    if original_size:
         orig_path = path
     else:
-        orig_path = np.int32(path/r)
-        orig_path[-1] = (im_rgb.shape[1]-1)
+        orig_path = np.int32(path / r)
+        orig_path[-1] = (im_rgb.shape[1] - 1)
         # dijkstra old code
         # path = get_best_division(graph, source, target)
 
-    # print the division on the image
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.imshow(im_rgb)
-    # y_path = np.ones(x[path].shape) * y_size
-    # ax.bar(x[path], y_path, '.-', color='green')
-    ax.vlines(orig_path, ymin=0, ymax=im_rgb.shape[0], color='red')
+    if display:
+        # print the division on the image
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.imshow(im_rgb)
+        # y_path = np.ones(x[path].shape) * y_size
+        # ax.bar(x[path], y_path, '.-', color='green')
+        ax.vlines(orig_path, ymin=0, ymax=im_rgb.shape[0], color='red')
 
-    plt.show()
+        plt.show()
 
-    if print_path:
+        # 3D display
         draw_3d_division(im_gray, orig_valid_mask, orig_path)
 
+        return orig_path, division_error
 
 
+if __name__ == "__main__":
+
+    eye_img = cv2.imread(r'../images/src.jpg')
+    eye_img = cv2.cvtColor(eye_img, cv2.COLOR_BGR2GRAY)
+    sectors = img_to_sectors(eye_img, center=(501, 273), radius=285, num_sectors=10, plot_debug=True)
+
+    if False:
+        slice_img = cv2.imread(r'../images/input.png')
+
+        slice_path, slice_error = get_slice_partition(slice_img, display=True)
