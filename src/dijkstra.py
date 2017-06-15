@@ -202,8 +202,14 @@ def shortest_path(graph, src_node, target_node, path_length, given_weights=None,
                             cur_node.set_previous(cur_src)
                             cur_target.set_previous(cur_node)
 
-    path = np.sort(sp[src_node.id, target_node.id, path_length])
-    sp_weight = weights[src_node.id, target_node.id, path_length]
+    path = sp[src_node.id, target_node.id, path_length]
+    p_length = path_length
+    while path is None:
+        p_length = p_length - 1
+        path = sp[src_node.id, target_node.id, p_length]
+
+    path = np.sort(path)
+    sp_weight = weights[src_node.id, target_node.id, p_length]
     # return weights[src_node.id, target_node.id, path_length], path
     return path, sp_weight, weights, sp
 
