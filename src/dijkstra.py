@@ -185,7 +185,7 @@ def shortest_path(graph, src_node, target_node, path_length, given_weights=None,
 
     # Compute shortest path in length <= path_length
     for e in range(e_init, path_length + 1):
-        print("calculating path in length %d" % e)
+        # print("calculating path in length %d" % e)
         for i in range(v):
             cur_src = graph.get_vertex(i)
             for j in range(i+1, v):
