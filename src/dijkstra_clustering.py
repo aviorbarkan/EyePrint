@@ -69,16 +69,19 @@ def build_img_graph(img, valid_mask, debug=False):
             else:
                 residuals = np.inf
 
-            graph.add_edge(x_start, x_end, residuals)
-            graph.add_edge(x_end, x_start, np.inf)
+            if x_end == x_start+1:
+                graph.add_edge(x_start, x_end,  np.inf)
+                graph.add_edge(x_end, x_start, np.inf)
+            else:
+                graph.add_edge(x_start, x_end, residuals)
+                graph.add_edge(x_end, x_start, np.inf)
 
     return graph
 
 
-def build_degrees_graph(img, center, radius, min_degree=1, debug=False):
-    degree_graph_fn = "degree_graph_v4.pkl"
+def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, img_width=None):
     n_points = int(360/min_degree) + 1  # 360 degrees
-
+    quarter = int((90/min_degree)) + 1
     # Build nodes - one for each degree
     graph = dijkstra.Graph()
     for i in range(n_points):
@@ -90,7 +93,7 @@ def build_degrees_graph(img, center, radius, min_degree=1, debug=False):
 
         for x_end in range(x_start + 1, n_points):
             # get the sector between x_start and x_end
-            angles = np.array([np.deg2rad(x_start), np.deg2rad(x_end*min_degree)])
+            angles = np.array([np.deg2rad(x_start*min_degree), np.deg2rad(x_end*min_degree)])
             print('calculating graph from degree %d to degree %d' % (x_start*min_degree, x_end*min_degree))
             sector = img_to_sectors(eye_img, center, radius, angles_list=angles, plot_debug=False)
             slice_valid_mask = sector[0]['mask_rotated']
@@ -103,11 +106,11 @@ def build_degrees_graph(img, center, radius, min_degree=1, debug=False):
             y_max_valid = np.max(valid_points[:, 0])
             cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
             cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
-
             slice_path, slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask, display=False,
-                                                          original_size=False, width=64)
+                                                          width=img_width)
             graph.add_edge(x_start, x_end, slice_error)
             graph.add_edge(x_end, x_start, np.inf)
+
         print("Saving to: %s" % degree_graph_fn)
         with open(degree_graph_fn, 'wb') as f:
             pickle.dump(graph, f)
@@ -205,9 +208,9 @@ def dist_from_line(a, b, point):
 
 def find_optimal_divisions_num(graph, source, target, display=False):
     # find f(1) and f(n)
-    _, f_one, _, _ = dijkstra.shortest_path(graph, source, target, 1)
+    _, f_one, init_weights, init_sp = dijkstra.shortest_path(graph, source, target, 1)
     print(f_one)
-    _, f_n, all_weights, all_sp = dijkstra.shortest_path(graph, source, target, target.id)
+    _, f_n, all_weights, all_sp = dijkstra.shortest_path(graph, source, target, target.id, init_weights, init_sp)
     print(f_n)
 
     # find the line that go through (1,f(1)) and (n,f(n))
@@ -227,7 +230,7 @@ def find_optimal_divisions_num(graph, source, target, display=False):
         k = int((float(high) + float(low)) / 2.0)
         k_neighbour = k + 1
         #print("low = %d, k = %d, high = %d" % (low, k, high))
-        # Get error for k divisions andty k+1 divisions
+        # Get error for k divisions and k+1 divisions
         path_k, f_k, _, _ = dijkstra.shortest_path(graph, source, target, k-source.id, all_weights, all_sp)
         path_k_neighbour, f_k_neighbour, _, _ = dijkstra.shortest_path(graph, source, target, k_neighbour-source.id,
                                                                        all_weights, all_sp)
@@ -269,9 +272,9 @@ def find_optimal_divisions_num(graph, source, target, display=False):
 
     points_list.append((target.id, f_n))
     points_list.sort(key=lambda tup: tup[0])
-    print("optimal division: k=%d" % k)
-    # if display:
-    #     draw_lines(points_list, connect_first_and_last=True)
+    print("optimal division: k=%d" % optimal_division)
+    if display:
+        draw_lines(points_list, connect_first_and_last=True)
     return optimal_division, optimal_path, optimal_division_error
 
 
@@ -354,14 +357,29 @@ def img_to_sectors(img, center, radius, angles_list, plot_debug=False):
     return result
 
 
-def get_slice_partition(img, img_mask, display=False, original_size=True, width=200):
+def get_slice_partition(img, img_mask, display=False, width=None):
+    """
+    Given a slice image and a mask for the valid parts, returns the optimal
+    partition of the slice by minimizing the errors from optimal plane, using
+    linear regression and finding the "elbow"/"knee" point in the error graph
+    between (1,f(1)) and (n, f(n)) with binary search.
+
+    :param img: slice image
+    :param img_mask: mask of valid parts of the image
+    :param display: show slice results
+    :param width: if given - work on a resized image in the given weights
+    :return: the path (optimal division) of the original slice and the division error
+    """
+
     im_gray = img.copy()
     orig_valid_mask = img_mask
 
-    if original_size:
+    # Use original image size
+    if width is None:
         valid_mask = img_mask
         input_img = im_gray
 
+    # Resize the image
     else:
         r = float(width) / im_gray.shape[1]
         dim = (width, int(im_gray.shape[0] * r))
@@ -381,13 +399,15 @@ def get_slice_partition(img, img_mask, display=False, original_size=True, width=
     division_num, path, division_error = find_optimal_divisions_num(graph, source, target, display)
     print("slice path: ")
     print(path)
-    if original_size:
+
+    # Original image size was used
+    if width is None:
         orig_path = path
+
+    # The image was resized, adjust path to the full size image path
     else:
         orig_path = np.int32(path / r)
         orig_path[-1] = (img.shape[1] - 1)
-        # dijkstra old code
-        # path = get_best_division(graph, source, target)
 
     if display:
         # print the division on the image
@@ -450,50 +470,49 @@ def plot_sectors(sectors, center, radius, img_rgb):
                 color='red', fontsize=10)
     ax.set_ylim([img_rgb.shape[0], 0])
     fig.tight_layout()
-    fig.savefig("eye_sectors2.png")
+    fig.savefig("eye_sectors32_6_no_neighbour.png")
     plt.show()
 
 if __name__ == "__main__":
     calculate = True
+    version = 4
+    center = (501, 273)
+    radius = 285
+    width = 32
+    min_degree = 6
+
     # Load eye image
     input_img = cv2.imread(r'../images/src.jpg')
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
-    sectors_fn = "sectors_v4.pkl"
     eye_img = cv2.cvtColor(input_img, cv2.COLOR_BGR2GRAY)
-    if calculate:
-        min_degree = 36
 
-        degree_graph = build_degrees_graph(eye_img, center=(501, 273), radius=285, min_degree=min_degree, debug=False)
+    # Paths for saving/loading the computed data
+    sectors_fn = "../data/v%d_sectors_deg%d_width%d.pkl" % (version, min_degree, width)
+    graph_fn = "../data/v%d_degrees_graph_deg%d_width%d.pkl" % (version, min_degree, width)
+    path_fn = "../data/v%d_degrees_path_deg%d_width%d.pkl" % (version, min_degree, width)
+
+    if calculate:
+
+        # Build a degree graph to represent the whole eye
+        degree_graph = build_degrees_graph(eye_img, center, radius, min_degree=min_degree,
+                                           degree_graph_fn=graph_fn, img_width=width)
 
         source = degree_graph.get_vertex(0)
         target = degree_graph.get_vertex(int(360/min_degree))
-        optimal_division, optimal_path_divided, optimal_division_error = find_optimal_divisions_num(degree_graph,
-                                                                                                    source, target)
-        optimal_path = optimal_path_divided * min_degree
-    else:
-        # optimal_division = 67
-        # optimal_path = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69,
-        #                 72, 75, 78, 81, 84, 87, 90, 96, 99, 102, 105, 108, 114, 117, 126, 135, 138, 141, 144, 147,
-        #                 150, 153, 159, 162, 171, 177, 291, 294, 297, 300, 303, 306, 309, 312, 315, 321, 327, 330,
-        #                 333, 336, 345, 354, 357, 360]
+        # Find the optimal division for the whole eye
+        opt_division, opt_path_divided, opt_division_error = find_optimal_divisions_num(degree_graph, source, target,
+                                                                                        display=True)
+        optimal_path = opt_path_divided * min_degree
 
-        num_sectors = 22
-        # optimal_path = np.linspace(0, 360, num_sectors + 1)
-        optimal_path = [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160,
-                        192, 360]
+        print("Saving optimal degrees path to: %s" % path_fn)
+        with open(path_fn, 'wb') as f:
+            pickle.dump(optimal_path, f)
 
-    print("optimal degree path: ")
-    print(optimal_path)
-    angles_path = np.deg2rad(optimal_path)
-    # sectors = img_to_num_sectors(eye_img, center=(501, 273), radius=285, num_sectors=10, plot_debug=False)
+        print("optimal degree path: ")
+        print(optimal_path)
 
-    # angles = np.deg2rad(np.arange(0, 360))
-    if os.path.isfile(sectors_fn):
-        print("Loading from: %s" % sectors_fn)
-        with open(sectors_fn, 'rb') as f:
-            sectors = pickle.load(f)
-    else:
-        sectors = img_to_sectors(eye_img, center=(501, 273), radius=285, angles_list=angles_path, plot_debug=False)
+        angles_path = np.deg2rad(optimal_path)
+        sectors = img_to_sectors(eye_img, center, radius, angles_list=angles_path, plot_debug=False)
 
         for sector in sectors:
             slice_valid_mask = sector['mask_rotated']
@@ -508,13 +527,25 @@ if __name__ == "__main__":
             cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
 
             cropped_slice_path, cropped_slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask,
-                                                                          display=False, original_size=False, width=64)
+                                                                          display=False, width=width)
 
             slice_path = cropped_slice_path + x_min_valid
             sector['path'] = slice_path
         print("Saving to: %s" % sectors_fn)
         with open(sectors_fn, 'wb') as f:
             pickle.dump(sectors, f)
-    print('')
+
+    # Load required data according to given version
+    else:
+        print("Loading from: %s" % path_fn)
+        with open(path_fn, 'rb') as f:
+            optimal_path = pickle.load(f)
+
+        if os.path.isfile(sectors_fn):
+            print("Loading from: %s" % sectors_fn)
+            with open(sectors_fn, 'rb') as f:
+                sectors = pickle.load(f)
+
+    print('Optimal division results:')
     plot_sectors(sectors, center=(501, 273), radius=285, img_rgb=img_rgb)
 
