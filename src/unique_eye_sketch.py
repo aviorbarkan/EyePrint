@@ -1,41 +1,36 @@
 import os
 import numpy as np
-from scipy.optimize import leastsq
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 import cv2
 import pickle
-from mpl_toolkits.mplot3d import Axes3D
-import dijkstra
+import data_structures
+import sys
 
 
-# https://gist.github.com/amroamroamro/1db8d69b4b65e8bc66a6
-
-def calc_plane(xyz):
-    # solve: z = ax + by + c (plane)
-    # np.c_ slice objects to concatenation along the second axis.
-    A = np.c_[xyz[:, :-1], np.ones(xyz.shape[0])]
-    # C = [a, b, c]
-    C, residuals, _, _ = np.linalg.lstsq(A, xyz[:, -1])  # coefficients (a, b, c)
-    if len(residuals) == 0:
-        residuals = 0
-    return C, residuals
-
+###############################################################################
+#                               Graph functions                               #
+###############################################################################
 
 def build_img_graph(img, valid_mask, debug=False):
+    """
+    Build a graph from a given image where the indices of x-axis are the nodes
+
+    :param img:  a gray-scale image
+    :param valid_mask: a mask that marks the relevant elements of the image
+    :param debug: flag for visualisation in debug mode
+    :return: the graph that was computed
+    """
     xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
     yy = yy - img.shape[0] / 2
     n_points = img.shape[1]
 
     # Build nodes
-    graph = dijkstra.Graph()
+    graph = data_structures.Graph()
     for i in range(n_points):
         graph.add_vertex(i)
 
     # Takes 3 points so that a plane could be computed at a later stage
     for x_start in range(n_points):
-        #print('calculating %d/%d' % (x_start, n_points))
-
         graph.add_edge(x_start, x_start, 0)
 
         for x_end in range(x_start + 1, n_points):
@@ -47,8 +42,6 @@ def build_img_graph(img, valid_mask, debug=False):
             if len(xyz) > 0:
                 C, residuals = calc_plane(xyz)
 
-                # Debug should be at max
-                # for 3d
                 if debug:
                     # evaluate it on grid
                     zz = C[0] * xx + C[1] * yy + C[2]
@@ -66,6 +59,7 @@ def build_img_graph(img, valid_mask, debug=False):
                     ax.set_zlim([0, 255])
                     plt.show()
 
+            # one directional graph - the weights in the opposite direction are inf
             else:
                 residuals = np.inf
 
@@ -79,16 +73,45 @@ def build_img_graph(img, valid_mask, debug=False):
     return graph
 
 
-def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, img_width=None):
+def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, img_width=None,
+                        start_at_degree=0,stop_at_degree=360, load_graph_fn=None):
+    """
+    Build a graph from a given image, where the angles are the nodes
+
+    :param eye_img: a gray-scale image
+    :param center: the center coordinate of the eye
+    :param radius: eye radius length
+    :param min_degree: for partial calculation
+    :param degree_graph_fn: for saving the graph
+    :param img_width: optional - to work on a costume sized image
+    :param start_at_degree: for partial calculation - start computing from a certain angle
+    :param stop_at_degree: for partial calculation - stop computing at a certain angle
+    :param load_graph_fn: for start computing from a partially computed graph
+    :return: the graph that was computed
+    """
+
     n_points = int(360/min_degree) + 1  # 360 degrees
-    quarter = int((90/min_degree)) + 1
+    starting_point = int(start_at_degree/min_degree)
+    ending_point = int(stop_at_degree/min_degree) + 1
+
     # Build nodes - one for each degree
-    graph = dijkstra.Graph()
-    for i in range(n_points):
-        graph.add_vertex(i)
+    if load_graph_fn is None:
+        # Build all graph nodes
+        graph = data_structures.Graph()
+        for i in range(n_points):
+            graph.add_vertex(i)
+    else:
+        # Continue calculating a given graph
+        print("Loading from: %s" % load_graph_fn)
+        with open(load_graph_fn, 'rb') as f:
+            graph = pickle.load(f)
+        backup_fn = load_graph_fn[:-4] + "_backup.pkl"
+        print("Saving to: %s" % backup_fn)
+        with open(backup_fn, 'wb') as f:
+            pickle.dump(graph, f)
 
     # Takes 3 points so that a plane could be computed at a later stage
-    for x_start in range(n_points):
+    for x_start in range(starting_point, ending_point):
         graph.add_edge(x_start, x_start, 0)
 
         for x_end in range(x_start + 1, n_points):
@@ -111,67 +134,122 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
             graph.add_edge(x_start, x_end, slice_error)
             graph.add_edge(x_end, x_start, np.inf)
 
-        print("Saving to: %s" % degree_graph_fn)
-        with open(degree_graph_fn, 'wb') as f:
-            pickle.dump(graph, f)
+    print("Saving to: %s" % degree_graph_fn)
+    with open(degree_graph_fn, 'wb') as f:
+        pickle.dump(graph, f)
+
     return graph
 
-def draw_2d_division(x, y, path):
+
+###############################################################################
+#                                Aux functions                                #
+###############################################################################
+
+def shortest_path(graph, src_node, target_node, path_length, given_weights=None, given_sp=None):
     """
-    Display a visualization of given vertices and the path
-    between them
+    Given a directed and two vertices ‘u’ and ‘v’ in it,
+    find shortest path from ‘u’ to ‘v’ with exactly k edges on the path.
 
-    :param x: discrete values of the vertices
-    :param y: vertices
-    :param path: the path between the vertices
+    :param graph: data set
+    :param src_node: where the path should start
+    :param target_node: where the path should end
+    :param path_length: the requiered path length
+    :param given_weights: pre-calculated weights in a given depth
+    :param given_sp: pre-calculated paths in a given depth
+    :return: chosen path, it's weight, all weight matrix, all possible paths matrix
     """
-    # Show the vertices
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    ax.scatter(x, y)
-    ax.plot(x[path], y[path], '.-', color='red')
+    v = graph.num_vertices
+    if path_length == 0:
+        if src_node.id == target_node.id:
+            return [src_node.id, target_node.id]
+        else:
+            return np.inf
 
-    plt.show()
+    weights = np.ones((v, v, path_length + 1)) * np.inf
+    sp = np.empty_like(weights, dtype=object)
+
+    # check if there are pre-calculated weights or paths, if so - start calculation from that point
+    if given_weights is None or given_sp is None:
+        e_init = 2
+        # Init path in length 1
+        for vertex_num in range(v):
+            vertex = graph.get_vertex(vertex_num)
+            for neighbour_num in range(v):
+                neighbour = graph.get_vertex(neighbour_num)
+                sp[vertex_num, neighbour_num, 1] = [vertex_num, neighbour_num]
+
+                if vertex_num == neighbour_num:
+                    weights[vertex_num, neighbour_num, 1] = np.inf
+                else:
+                    weights[vertex_num, neighbour_num, 1] = vertex.get_weight(neighbour)
+    # start the calculation from the first depth
+    else:
+        e_init = given_weights.shape[2]
+        if given_weights.shape[2] <= path_length:
+            weights[:, :, :given_weights.shape[2]] = given_weights
+            sp[:, :, :given_sp.shape[2]] = given_sp
+        else:
+            weights = given_weights
+            sp = given_sp
+
+    # Compute shortest path in length <= path_length
+    for e in range(e_init, path_length + 1):
+        print("calculating path in length %d" % e)
+        for i in range(v):
+            cur_src = graph.get_vertex(i)
+            for j in range(i+1, v):
+                cur_target = graph.get_vertex(j)
+                for k in range(i+1, j):
+                    cur_node = graph.get_vertex(k)
+                    if (cur_src.get_weight(cur_node) != np.inf and
+                        cur_src.id != cur_node.id and cur_target.id != cur_node.id and
+                        weights[k, j, e - 1] != np.inf):
+                        new_weight = cur_src.get_weight(cur_node) + weights[k, j, e - 1]
+                        if new_weight < weights[i, j, e]:
+                            weights[i, j, e] = new_weight
+                            sp[i, j, e] = [i] + [k] + sp[k, j, e-1][1:-1] + [j]
+                            cur_node.set_previous(cur_src)
+                            cur_target.set_previous(cur_node)
+
+    path = sp[src_node.id, target_node.id, path_length]
+    p_length = path_length
+    while path is None:
+        p_length = p_length - 1
+        path = sp[src_node.id, target_node.id, p_length]
+
+    path = np.sort(path)
+    sp_weight = weights[src_node.id, target_node.id, p_length]
+
+    # return chosen path, it's weight, all weight matrix, all possible paths matrix
+    return path, sp_weight, weights, sp
 
 
-def draw_3d_division(img, valid_mask, path):
-    xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-    yy = yy - img.shape[0] / 2
-    n_points = img.shape[1]
-    xx_valid = xx[valid_mask]
-    yy_valid = yy[valid_mask]
-    img_valid = img[valid_mask]
+def calc_plane(xyz):
+    """
+    calculate plane for given data
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    :param xyz: data for computing plane
+    :return: coefficients (C), residuals
+    """
 
-    ax.scatter(xx_valid, yy_valid, img_valid, s=10, c=img_valid, cmap='gray', depthshade=False)
-    ax.scatter(xx[:, path], yy[:, path], 0, s=10, color='red', depthshade=False)
-
-    # ax.plot(x[path], y[path], z[path], color='red')
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_zlim([0, 255])
-
-    for n in range(len(path) - 1):
-        cur_valid_mask = valid_mask[:, path[n]:path[n + 1]]
-        x_vec = xx[:, path[n]:path[n + 1]][cur_valid_mask]
-        y_vec = yy[:, path[n]:path[n + 1]][cur_valid_mask]
-        z_vec = img[:, path[n]:path[n + 1]][cur_valid_mask]
-        xyz = np.c_[x_vec, y_vec, z_vec]
-        C, residuals = calc_plane(xyz)
-        print(C)
-
-        xx_section = xx[:, path[n]:path[n + 1]]
-        yy_section = yy[:, path[n]:path[n + 1]]
-        zz = C[0] * xx_section + C[1] * yy_section + C[2]
-        ax.plot_surface(xx_section, yy_section, zz, alpha=0.5, color='red')
-
-    plt.show()
+    # solve: z = ax + by + c (plane)
+    # np.c_ slice objects to concatenation along the second axis.
+    A = np.c_[xyz[:, :-1], np.ones(xyz.shape[0])]
+    # C = [a, b, c]
+    C, residuals, _, _ = np.linalg.lstsq(A, xyz[:, -1])  # coefficients (a, b, c)
+    if len(residuals) == 0:
+        residuals = 0
+    return C, residuals
 
 
 def find_line(first_point, second_point):
+    """
+    given two points, find the line between them
+    :param first_point:
+    :param second_point:
+    :return: line equation coefficients (a, b)
+    """
+
     # find line equation y=ax+b
     delta_x = np.float32(second_point[0]) - np.float32(first_point[0])
     delta_y = np.float32(second_point[1]) - np.float32(first_point[1])
@@ -181,36 +259,42 @@ def find_line(first_point, second_point):
     return a, b
 
 
-def draw_lines(points_list, connect_first_and_last=False):
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    for i in range(len(points_list) - 1):
-        p1 = points_list[i]
-        p2 = points_list[i + 1]
-        plt.plot([p1[0], p2[0]], [p1[1], p2[1]])
-
-    if connect_first_and_last:
-        plt.plot([points_list[0][0], points_list[-1][0]], [points_list[0][1], points_list[-1][1]])
-
-    ax.set_xlabel('Number of divisions')
-    ax.set_ylabel('Error')
-    plt.show()
-
-
 def dist_from_line(a, b, point):
-    # returns the distance of a point from a line with given a and b (y=ax+b)
+    """
+    given line equation coefficients and a point, computes the distance of the point
+    from the line
+
+    :param a: a coefficient from y=ax+b
+    :param b: b coefficient from y=ax+b
+    :param point: x,y point
+    :return: the distance of a point from a line with given a and b (y=ax+b)
+    """
+
     numerator = a * point[0] - point[1] + b
     denominator = np.sqrt(a ** 2 + 1)
-    d = np.abs(numerator / denominator)
+    dist = np.abs(numerator / denominator)
 
-    return d
+    return dist
 
 
 def find_optimal_divisions_num(graph, source, target, display=False):
+    """
+    given a graph, finds the optimal number of divisions of the graph, according
+    to it's sorce and target nodes, using binary search.
+    :param graph:
+    :param source: source node in the graph
+    :param target: target node in the graph
+    :param display: flag for visualisations
+    :return: optimal division number, optimal path from source node to target node,
+             the error of the optimal division
+    """
+
     # find f(1) and f(n)
-    _, f_one, init_weights, init_sp = dijkstra.shortest_path(graph, source, target, 1)
+    _, f_one, init_weights, init_sp = shortest_path(graph, source, target, 1)
+    _, f_n, all_weights, all_sp = shortest_path(graph, source, target, target.id, init_weights, init_sp)
+    f_one = f_one - f_n
+    f_n = f_n - f_n
     print(f_one)
-    _, f_n, all_weights, all_sp = dijkstra.shortest_path(graph, source, target, target.id, init_weights, init_sp)
     print(f_n)
 
     # find the line that go through (1,f(1)) and (n,f(n))
@@ -229,11 +313,11 @@ def find_optimal_divisions_num(graph, source, target, display=False):
     while low < high:
         k = int((float(high) + float(low)) / 2.0)
         k_neighbour = k + 1
-        #print("low = %d, k = %d, high = %d" % (low, k, high))
+
         # Get error for k divisions and k+1 divisions
-        path_k, f_k, _, _ = dijkstra.shortest_path(graph, source, target, k-source.id, all_weights, all_sp)
-        path_k_neighbour, f_k_neighbour, _, _ = dijkstra.shortest_path(graph, source, target, k_neighbour-source.id,
-                                                                       all_weights, all_sp)
+        path_k, f_k, _, _ = shortest_path(graph, source, target, k-source.id, all_weights, all_sp)
+        path_k_neighbour, f_k_neighbour, _, _ = shortest_path(graph, source, target, k_neighbour-source.id,
+                                                              all_weights, all_sp)
 
         dist_k = dist_from_line(a, b, (k, f_k))
         dist_k_neighbour = dist_from_line(a, b, (k_neighbour, f_k_neighbour))
@@ -382,7 +466,7 @@ def get_slice_partition(img, img_mask, display=False, width=None):
     # Resize the image
     else:
         r = float(width) / im_gray.shape[1]
-        dim = (width, int(im_gray.shape[0] * r))
+        dim = (width, max(1, int(im_gray.shape[0] * r)))
         # perform the actual resizing of the image and show it
         resized = cv2.resize(im_gray, dim, interpolation=cv2.INTER_AREA)
         input_img = resized
@@ -425,7 +509,80 @@ def get_slice_partition(img, img_mask, display=False, width=None):
 
     return orig_path, division_error
 
+###############################################################################
+#                               Visualizations                                #
+###############################################################################
+
+
+def draw_2d_division(x, y, path):
+    """
+    Display a visualization of given vertices and the path
+    between them
+
+    :param x: discrete values of the vertices
+    :param y: vertices
+    :param path: the path between the vertices
+    """
+    # Show the vertices
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.scatter(x, y)
+    ax.plot(x[path], y[path], '.-', color='red')
+
+    plt.show()
+
+
+def draw_3d_division(img, valid_mask, path):
+    """
+    Display a visualization of given img and its partition according to given path
+
+    :param img: input image
+    :param valid_mask: mask of the relevant elements in the image
+    :param path: the img partition
+    :return:
+    """
+
+    xx, yy = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
+    yy = yy - img.shape[0] / 2
+    n_points = img.shape[1]
+    xx_valid = xx[valid_mask]
+    yy_valid = yy[valid_mask]
+    img_valid = img[valid_mask]
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.scatter(xx_valid, yy_valid, img_valid, s=10, c=img_valid, cmap='gray', depthshade=False)
+    ax.scatter(xx[:, path], yy[:, path], 0, s=10, color='red', depthshade=False)
+
+    # ax.plot(x[path], y[path], z[path], color='red')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_zlim([0, 255])
+
+    for n in range(len(path) - 1):
+        cur_valid_mask = valid_mask[:, path[n]:path[n + 1]]
+        x_vec = xx[:, path[n]:path[n + 1]][cur_valid_mask]
+        y_vec = yy[:, path[n]:path[n + 1]][cur_valid_mask]
+        z_vec = img[:, path[n]:path[n + 1]][cur_valid_mask]
+        xyz = np.c_[x_vec, y_vec, z_vec]
+        C, residuals = calc_plane(xyz)
+        print(C)
+
+        xx_section = xx[:, path[n]:path[n + 1]]
+        yy_section = yy[:, path[n]:path[n + 1]]
+        zz = C[0] * xx_section + C[1] * yy_section + C[2]
+        ax.plot_surface(xx_section, yy_section, zz, alpha=0.5, color='red')
+
+    plt.show()
+
+
 def plot_sectors(sectors, center, radius, img_rgb):
+    """
+    display the partition of sectors
+    """
+
     for sector in sectors:
         mask_rotated = sector['mask_rotated']
         path = sector['path']
@@ -470,16 +627,42 @@ def plot_sectors(sectors, center, radius, img_rgb):
                 color='red', fontsize=10)
     ax.set_ylim([img_rgb.shape[0], 0])
     fig.tight_layout()
-    fig.savefig("eye_sectors32_6_no_neighbour.png")
+    fig.savefig("eye_partition_test.png")
     plt.show()
+
+
+def draw_lines(points_list, connect_first_and_last=False):
+    """
+    given a list of points, draw a line between each two
+
+    :param points_list: list of x,y points
+    :param connect_first_and_last: flag. if true - draw a line between the
+           first point and last point.
+    :return:
+    """
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    for i in range(len(points_list) - 1):
+        p1 = points_list[i]
+        p2 = points_list[i + 1]
+        plt.plot([p1[0], p2[0]], [p1[1], p2[1]])
+
+    if connect_first_and_last:
+        plt.plot([points_list[0][0], points_list[-1][0]], [points_list[0][1], points_list[-1][1]])
+
+    ax.set_xlabel('Number of divisions')
+    ax.set_ylabel('Error')
+    plt.show()
+
 
 if __name__ == "__main__":
     calculate = True
-    version = 4
+    load_graph = False
+    version = 9
     center = (501, 273)
     radius = 285
-    width = 32
-    min_degree = 6
+    width = 16
+    min_degree = 15
 
     # Load eye image
     input_img = cv2.imread(r'../images/src.jpg')
@@ -492,48 +675,68 @@ if __name__ == "__main__":
     path_fn = "../data/v%d_degrees_path_deg%d_width%d.pkl" % (version, min_degree, width)
 
     if calculate:
+        sys.setrecursionlimit(2000)
+        # if the graph is partly computed - load the graph and continue from there
+        if load_graph:
+            start_degree = 180
+            end_degree = 360
+            if start_degree == 0:
+                load_graph_fn = None
+            else:
+                load_graph_fn = graph_fn
 
-        # Build a degree graph to represent the whole eye
+        # calculate the entire graph
+        else:
+            load_graph_fn = None
+            start_degree = 0
+            end_degree = 360
+
         degree_graph = build_degrees_graph(eye_img, center, radius, min_degree=min_degree,
-                                           degree_graph_fn=graph_fn, img_width=width)
+                                           degree_graph_fn=graph_fn, img_width=width,
+                                           load_graph_fn=load_graph_fn, start_at_degree=start_degree,
+                                           stop_at_degree=end_degree)
+        if end_degree == 360:
+            source = degree_graph.get_vertex(0)
+            target = degree_graph.get_vertex(int(360 / min_degree))
+            # Find the optimal division for the whole eye
+            opt_division, opt_path_divided, opt_division_error = find_optimal_divisions_num(degree_graph, source, target,
+                                                                                            display=True)
+            optimal_path = opt_path_divided * min_degree
 
-        source = degree_graph.get_vertex(0)
-        target = degree_graph.get_vertex(int(360/min_degree))
-        # Find the optimal division for the whole eye
-        opt_division, opt_path_divided, opt_division_error = find_optimal_divisions_num(degree_graph, source, target,
-                                                                                        display=True)
-        optimal_path = opt_path_divided * min_degree
+            print("Saving optimal degrees path to: %s" % path_fn)
+            with open(path_fn, 'wb') as f:
+                pickle.dump(optimal_path, f)
 
-        print("Saving optimal degrees path to: %s" % path_fn)
-        with open(path_fn, 'wb') as f:
-            pickle.dump(optimal_path, f)
+            print("optimal degree path: ")
+            print(optimal_path)
 
-        print("optimal degree path: ")
-        print(optimal_path)
+            angles_path = np.deg2rad(optimal_path)
+            sectors = img_to_sectors(eye_img, center, radius, angles_list=angles_path, plot_debug=False)
 
-        angles_path = np.deg2rad(optimal_path)
-        sectors = img_to_sectors(eye_img, center, radius, angles_list=angles_path, plot_debug=False)
+            for sector in sectors:
+                slice_valid_mask = sector['mask_rotated']
+                slice_img = sector['img_sector_rotated']
 
-        for sector in sectors:
-            slice_valid_mask = sector['mask_rotated']
-            slice_img = sector['img_sector_rotated']
+                valid_points = np.argwhere(slice_valid_mask == True)
+                x_min_valid = np.min(valid_points[:, 1])
+                x_max_valid = np.max(valid_points[:, 1])
+                y_min_valid = np.min(valid_points[:, 0])
+                y_max_valid = np.max(valid_points[:, 0])
+                cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
+                cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
 
-            valid_points = np.argwhere(slice_valid_mask == True)
-            x_min_valid = np.min(valid_points[:, 1])
-            x_max_valid = np.max(valid_points[:, 1])
-            y_min_valid = np.min(valid_points[:, 0])
-            y_max_valid = np.max(valid_points[:, 0])
-            cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
-            cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
+                cropped_slice_path, cropped_slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask,
+                                                                              display=False, width=width)
 
-            cropped_slice_path, cropped_slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask,
-                                                                          display=False, width=width)
+                slice_path = cropped_slice_path + x_min_valid
+                sector['path'] = slice_path
+            print("Saving to: %s" % sectors_fn)
+            with open(sectors_fn, 'wb') as f:
+                pickle.dump(sectors, f)
 
-            slice_path = cropped_slice_path + x_min_valid
-            sector['path'] = slice_path
-        print("Saving to: %s" % sectors_fn)
-        with open(sectors_fn, 'wb') as f:
-            pickle.dump(sectors, f)
+            # Plot the final sectors of the eye
+            print('Optimal division results:')
+            plot_sectors(sectors, center=(501, 273), radius=285, img_rgb=img_rgb)
 
     # Load required data according to given version
     else:
@@ -546,6 +749,9 @@ if __name__ == "__main__":
             with open(sectors_fn, 'rb') as f:
                 sectors = pickle.load(f)
 
-    print('Optimal division results:')
-    plot_sectors(sectors, center=(501, 273), radius=285, img_rgb=img_rgb)
+        print('Optimal division results:')
+        plot_sectors(sectors, center=center, radius=radius, img_rgb=img_rgb)
+
+
+
 
