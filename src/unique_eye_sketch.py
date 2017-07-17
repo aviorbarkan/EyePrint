@@ -627,7 +627,7 @@ def plot_sectors(sectors, center, radius, img_rgb):
                 color='red', fontsize=10)
     ax.set_ylim([img_rgb.shape[0], 0])
     fig.tight_layout()
-    fig.savefig("eye_partition_test.png")
+    fig.savefig("eye_partition_test_12.png")
     plt.show()
 
 
@@ -658,11 +658,11 @@ def draw_lines(points_list, connect_first_and_last=False):
 if __name__ == "__main__":
     calculate = True
     load_graph = False
-    version = 9
+    version = 1
     center = (501, 273)
     radius = 285
-    width = 16
-    min_degree = 15
+    width = None
+    min_degree = 1
 
     # Load eye image
     input_img = cv2.imread(r'../images/src.jpg')
@@ -670,15 +670,15 @@ if __name__ == "__main__":
     eye_img = cv2.cvtColor(input_img, cv2.COLOR_BGR2GRAY)
 
     # Paths for saving/loading the computed data
-    sectors_fn = "../data/v%d_sectors_deg%d_width%d.pkl" % (version, min_degree, width)
-    graph_fn = "../data/v%d_degrees_graph_deg%d_width%d.pkl" % (version, min_degree, width)
-    path_fn = "../data/v%d_degrees_path_deg%d_width%d.pkl" % (version, min_degree, width)
+    sectors_fn = "../data/v%d_sectors_deg%d.pkl" % (version, min_degree)
+    graph_fn = "../data/v%d_degrees_graph_deg%d.pkl" % (version, min_degree)
+    path_fn = "../data/v%d_degrees_path_deg%d.pkl" % (version, min_degree)
 
     if calculate:
         sys.setrecursionlimit(2000)
         # if the graph is partly computed - load the graph and continue from there
         if load_graph:
-            start_degree = 180
+            start_degree = 120
             end_degree = 360
             if start_degree == 0:
                 load_graph_fn = None
