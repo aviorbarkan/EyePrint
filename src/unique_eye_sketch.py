@@ -5,6 +5,10 @@ import cv2
 import pickle
 import data_structures
 import sys
+import time as time
+
+from sklearn.feature_extraction.image import grid_to_graph
+from sklearn.cluster import AgglomerativeClustering
 
 
 ###############################################################################
@@ -15,7 +19,7 @@ def build_img_graph(img, valid_mask, debug=False):
     """
     Build a graph from a given image where the indices of x-axis are the nodes
 
-    :param img:  a gray-scale image
+    :param img: a gray-scale image
     :param valid_mask: a mask that marks the relevant elements of the image
     :param debug: flag for visualisation in debug mode
     :return: the graph that was computed
@@ -147,7 +151,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
 
 def shortest_path(graph, src_node, target_node, path_length, given_weights=None, given_sp=None):
     """
-    Given a directed and two vertices ‘u’ and ‘v’ in it,
+    Given a directed graph and two vertices ‘u’ and ‘v’ in it,
     find shortest path from ‘u’ to ‘v’ with exactly k edges on the path.
 
     :param graph: data set
@@ -627,7 +631,7 @@ def plot_sectors(sectors, center, radius, img_rgb):
                 color='red', fontsize=10)
     ax.set_ylim([img_rgb.shape[0], 0])
     fig.tight_layout()
-    fig.savefig("eye_partition_test_12.png")
+    fig.savefig("eye_partition_eye6_16b.png")
     plt.show()
 
 
@@ -655,17 +659,37 @@ def draw_lines(points_list, connect_first_and_last=False):
     plt.show()
 
 
+def unique_eye_sketch(rgb_img, center, radius, agglumerative=True):
+    """
+
+    :param rgb_img: and rgb eye image
+    :param center: the center coordinates of the eye (x,y)
+    :param radius: eye radius
+    :param agglumerative: flag for the use of agglumerative clustering
+    :return: the eye image with unique eye print segmentation
+    """
+
+
 if __name__ == "__main__":
     calculate = True
     load_graph = False
+    agglomerative = True
     version = 1
     center = (501, 273)
     radius = 285
-    width = None
-    min_degree = 1
+    width = 16
+    min_degree = 60
+
+    # work_around
+    img_num = 1
+    img_centers = [(0, 0), (198, 195), (0, 0), (0, 0), (0, 0), (0, 0), (212, 179), (207, 130), (0, 0), (192, 141), (0, 0)]
+    img_radiuses = [0, 95, 0, 0, 0, 0, 212, 121, 0, 133, 0]
+    radius = img_radiuses[img_num]
+    center = img_centers[img_num]
+
 
     # Load eye image
-    input_img = cv2.imread(r'../images/src.jpg')
+    input_img = cv2.imread(r'../images/eye%d.jpg' % img_num)
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
     eye_img = cv2.cvtColor(input_img, cv2.COLOR_BGR2GRAY)
 
@@ -713,30 +737,70 @@ if __name__ == "__main__":
             angles_path = np.deg2rad(optimal_path)
             sectors = img_to_sectors(eye_img, center, radius, angles_list=angles_path, plot_debug=False)
 
-            for sector in sectors:
-                slice_valid_mask = sector['mask_rotated']
-                slice_img = sector['img_sector_rotated']
+            if agglomerative:
+                fig = plt.figure(figsize=(5, 5))
+                ax = fig.add_subplot(1, 1, 1)
+                ax.imshow(img_rgb, cmap=plt.cm.gray)
+                for sector in sectors:
+                    slice_valid_mask = sector['mask']
+                    slice_img_rotated = sector['img_sector_rotated']
+                    X = np.reshape(slice_img_rotated, (-1, 1))
 
-                valid_points = np.argwhere(slice_valid_mask == True)
-                x_min_valid = np.min(valid_points[:, 1])
-                x_max_valid = np.max(valid_points[:, 1])
-                y_min_valid = np.min(valid_points[:, 0])
-                y_max_valid = np.max(valid_points[:, 0])
-                cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
-                cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
+                    connectivity = grid_to_graph(*slice_img_rotated.shape)
 
-                cropped_slice_path, cropped_slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask,
-                                                                              display=False, width=width)
+                    print("Compute structured hierarchical clustering...")
+                    st = time.time()
+                    n_clusters = 7  # number of regions
+                    ward = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward',
+                                                   connectivity=connectivity)
+                    ward.fit(X)
+                    clusters_labels = np.reshape(ward.labels_, slice_img_rotated.shape)
+                    max_label = np.max(clusters_labels)
+                    clusters_labels = np.round(clusters_labels*256/max_label)
+                    # rotate labels to original slice position
+                    ang = (sector['ang2'] + sector['ang1']) / 2.0
+                    M = cv2.getRotationMatrix2D(center, ang * 180 / np.pi, 1.0)
+                    labels_rotated = cv2.warpAffine(clusters_labels, M, (clusters_labels.shape[1],
+                                                                         clusters_labels.shape[0]))
+                    labels_rotated = np.round(labels_rotated*max_label/256)
+                    labels_rotated[~slice_valid_mask] = -1
+                    sector['labels'] = labels_rotated
 
-                slice_path = cropped_slice_path + x_min_valid
-                sector['path'] = slice_path
+                    valid_labels = np.unique(labels_rotated)
+                    valid_labels = valid_labels[valid_labels >= 0]
+                    for l in valid_labels:
+                        plt.contour(labels_rotated == l, contours=1, colors='r')
+
+                fig.tight_layout()
+                fig.savefig("eye_partition_agglomerative.png")
+                plt.show()
+
+            else:
+                for sector in sectors:
+                    slice_valid_mask = sector['mask_rotated']
+                    slice_img = sector['img_sector_rotated']
+
+                    valid_points = np.argwhere(slice_valid_mask == True)
+                    x_min_valid = np.min(valid_points[:, 1])
+                    x_max_valid = np.max(valid_points[:, 1])
+                    y_min_valid = np.min(valid_points[:, 0])
+                    y_max_valid = np.max(valid_points[:, 0])
+                    cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
+                    cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
+
+                    cropped_slice_path, cropped_slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask,
+                                                                                  display=False, width=width)
+
+                    slice_path = cropped_slice_path + x_min_valid
+                    sector['path'] = slice_path
             print("Saving to: %s" % sectors_fn)
             with open(sectors_fn, 'wb') as f:
                 pickle.dump(sectors, f)
 
             # Plot the final sectors of the eye
             print('Optimal division results:')
-            plot_sectors(sectors, center=(501, 273), radius=285, img_rgb=img_rgb)
+            if not agglomerative:
+                plot_sectors(sectors, center=center, radius=radius, img_rgb=img_rgb)
 
     # Load required data according to given version
     else:
