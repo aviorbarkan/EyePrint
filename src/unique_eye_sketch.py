@@ -669,8 +669,8 @@ def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
     :return: the eye image with unique eye print segmentation
     """
 
-    width = 16
-    min_degree = 6
+    width = None
+    min_degree = 1
     sys.setrecursionlimit(2000)
     output_img_fn = 'unique_eye_sketch.png'
 
