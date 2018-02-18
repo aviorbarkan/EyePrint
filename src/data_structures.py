@@ -64,6 +64,9 @@ class Graph:
     def __iter__(self):
         return iter(self.vert_dict.values())
 
+    def get_vert_dict_values(self):
+        return self.vert_dict.values()
+
     def add_vertex(self, node):
         self.num_vertices = self.num_vertices + 1
         new_vertex = Vertex(node)
@@ -94,3 +97,11 @@ class Graph:
     def get_previous(self, current):
         return self.previous
 
+
+    def concat_graph(self, other_graph):
+        try:
+            for other_vertex in other_graph.get_vert_dict_values():
+                for neighbor in other_vertex.get_connections():
+                    self.add_edge(other_vertex.get_id(), neighbor.get_id(), other_vertex.get_weight(neighbor))
+        except:
+            print "glu"

@@ -6,6 +6,10 @@ import pickle
 import data_structures
 import sys
 import time as time
+import coreset_creator
+import math
+import multiprocessing
+from multiprocessing import Pool
 
 from sklearn.feature_extraction.image import grid_to_graph
 from sklearn.cluster import AgglomerativeClustering
@@ -18,7 +22,6 @@ from sklearn.cluster import AgglomerativeClustering
 def build_img_graph(img, valid_mask, debug=False):
     """
     Build a graph from a given image where the indices of x-axis are the nodes
-
     :param img: a gray-scale image
     :param valid_mask: a mask that marks the relevant elements of the image
     :param debug: flag for visualisation in debug mode
@@ -81,7 +84,6 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
                         start_at_degree=0, stop_at_degree=360, load_graph_fn=None):
     """
     Build a graph from a given image, where the angles are the nodes
-
     :param eye_img: a gray-scale image
     :param center: the center coordinate of the eye
     :param radius: eye radius length
@@ -114,29 +116,21 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
         with open(backup_fn, 'wb') as f:
             pickle.dump(graph, f)
 
-    # Takes 3 points so that a plane could be computed at a later stage
-    for x_start in range(starting_point, ending_point):
-        graph.add_edge(x_start, x_start, 0)
-
-        for x_end in range(x_start + 1, n_points):
-            # get the sector between x_start and x_end
-            angles = np.array([np.deg2rad(x_start*min_degree), np.deg2rad(x_end*min_degree)])
-            print('calculating graph from degree %d to degree %d' % (x_start*min_degree, x_end*min_degree))
-            sector = img_to_sectors(eye_img, center, radius, angles_list=angles, plot_debug=False)
-            slice_valid_mask = sector[0]['mask_rotated']
-            slice_img = sector[0]['img_sector_rotated']
-
-            valid_points = np.argwhere(slice_valid_mask == True)
-            x_min_valid = np.min(valid_points[:, 1])
-            x_max_valid = np.max(valid_points[:, 1])
-            y_min_valid = np.min(valid_points[:, 0])
-            y_max_valid = np.max(valid_points[:, 0])
-            cropped_slice_img = slice_img[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
-            cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid, x_min_valid:x_max_valid]
-            slice_path, slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask, display=False,
-                                                          width=img_width)
-            graph.add_edge(x_start, x_end, slice_error)
-            graph.add_edge(x_end, x_start, np.inf)
+    results = [None] * n_points
+    pool = Pool(processes=multiprocessing.cpu_count() - 1)
+    for index in range(starting_point, ending_point, 1):
+        results[index] = pool.apply_async(calculate_graph_from_degree_to_degree_parallel,
+                                          args=(index, n_points, min_degree, img_width, graph, center, radius, eye_img))
+    pool.close()
+    pool.join()
+    count = 0
+    try:
+        for result in results:
+            count += 1
+            graph.concat_graph(result.get())
+    except:
+        print "The graph concatenation received an exception. Ony concatenated " + str(count) + "out of " + \
+                str(n_points) + ". You are probably using not enough points in the image. Try larger dataset."
 
     print("Saving to: %s" % degree_graph_fn)
     with open(degree_graph_fn, 'wb') as f:
@@ -145,15 +139,39 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
     return graph
 
 
+def calculate_graph_from_degree_to_degree_parallel(x_start, n_points, min_degree, img_width, graph, center, radius, eye_img):
+    graph.add_edge(x_start, x_start, 0)
+
+    for x_end in range(x_start + 1, n_points):
+        # get the sector between x_start and x_end
+        angles = np.array([np.deg2rad(x_start * min_degree), np.deg2rad(x_end * min_degree)])
+        print('calculating graph from degree %d to degree %d' % (x_start * min_degree, x_end * min_degree))
+        sector = img_to_sectors(eye_img, center, radius, angles_list=angles, plot_debug=False)
+        slice_valid_mask = sector[0]['mask_rotated']
+        slice_img = sector[0]['img_sector_rotated']
+
+        valid_points = np.argwhere(slice_valid_mask == True)
+        x_min_valid = np.min(valid_points[:, 1])
+        x_max_valid = np.max(valid_points[:, 1])
+        y_min_valid = np.min(valid_points[:, 0])
+        y_max_valid = np.max(valid_points[:, 0])
+        cropped_slice_img = slice_img[y_min_valid:y_max_valid + 1, x_min_valid:x_max_valid + 1]
+        cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid + 1, x_min_valid:x_max_valid + 1]
+        slice_path, slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask, display=False,
+                                                      width=img_width)
+        graph.add_edge(x_start, x_end, slice_error)
+        graph.add_edge(x_end, x_start, np.inf)
+
+    return graph
+
+
 ###############################################################################
 #                                Aux functions                                #
 ###############################################################################
-
 def shortest_path(graph, src_node, target_node, path_length, given_weights=None, given_sp=None):
     """
-    Given a directed graph and two vertices ‘u’ and ‘v’ in it,
-    find shortest path from ‘u’ to ‘v’ with exactly k edges on the path.
-
+    Given a directed graph and two vertices 'u' and 'v' in it,
+    find shortest path from 'u' to 'v' with exactly k edges on the path.
     :param graph: data set
     :param src_node: where the path should start
     :param target_node: where the path should end
@@ -198,7 +216,7 @@ def shortest_path(graph, src_node, target_node, path_length, given_weights=None,
 
     # Compute shortest path in length <= path_length
     for e in range(e_init, path_length + 1):
-        print("calculating path in length %d" % e)
+        # print("calculating path in length %d" % e)
         for i in range(v):
             cur_src = graph.get_vertex(i)
             for j in range(i+1, v):
@@ -231,7 +249,6 @@ def shortest_path(graph, src_node, target_node, path_length, given_weights=None,
 def calc_plane(xyz):
     """
     calculate plane for given data
-
     :param xyz: data for computing plane
     :return: coefficients (C), residuals
     """
@@ -267,7 +284,6 @@ def dist_from_line(a, b, point):
     """
     given line equation coefficients and a point, computes the distance of the point
     from the line
-
     :param a: a coefficient from y=ax+b
     :param b: b coefficient from y=ax+b
     :param point: x,y point
@@ -416,7 +432,7 @@ def img_to_sectors(img, center, radius, angles_list, plot_debug=False):
     for ind in range(1, len(angles_list)):
         ang1 = angles_list[ind - 1]
         ang2 = angles_list[ind]
-        mask_angle = np.logical_and(theta > ang1, theta < ang2)
+        mask_angle = np.logical_and(theta >= ang1, theta < ang2)
         mask = np.logical_and(mask_radius, mask_angle)
         img_sector = img * mask
         ang = (ang2 + ang1) / 2.0
@@ -451,7 +467,6 @@ def get_slice_partition(img, img_mask, display=False, width=None):
     partition of the slice by minimizing the errors from optimal plane, using
     linear regression and finding the "elbow"/"knee" point in the error graph
     between (1,f(1)) and (n, f(n)) with binary search.
-
     :param img: slice image
     :param img_mask: mask of valid parts of the image
     :param display: show slice results
@@ -522,7 +537,6 @@ def draw_2d_division(x, y, path):
     """
     Display a visualization of given vertices and the path
     between them
-
     :param x: discrete values of the vertices
     :param y: vertices
     :param path: the path between the vertices
@@ -539,7 +553,6 @@ def draw_2d_division(x, y, path):
 def draw_3d_division(img, valid_mask, path):
     """
     Display a visualization of given img and its partition according to given path
-
     :param img: input image
     :param valid_mask: mask of the relevant elements in the image
     :param path: the img partition
@@ -638,7 +651,6 @@ def plot_sectors(sectors, center, radius, img_rgb, output_fn):
 def draw_lines(points_list, connect_first_and_last=False):
     """
     given a list of points, draw a line between each two
-
     :param points_list: list of x,y points
     :param connect_first_and_last: flag. if true - draw a line between the
            first point and last point.
@@ -659,9 +671,8 @@ def draw_lines(points_list, connect_first_and_last=False):
     plt.show()
 
 
-def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
+def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     """
-
     :param rgb_eye_img: and rgb eye image
     :param center: the center coordinates of the eye (x,y)
     :param radius: eye radius
@@ -670,7 +681,7 @@ def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
     """
 
     width = None
-    min_degree = 1
+    min_degree = 6
     sys.setrecursionlimit(2000)
     output_img_fn = 'unique_eye_sketch.png'
 
@@ -681,8 +692,12 @@ def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
     sectors_fn = "../data/sectors.pkl"
     graph_fn = "../data/degrees_graph.pkl"
     path_fn = "../data/degrees_path.pkl"
-
-    degree_graph = build_degrees_graph(eye_img, center, radius, min_degree=min_degree,
+    coreset_eye_img = coreset_creator.create(eye_img, eye_img.shape[0], eye_img.shape[1], coreset_size)
+    new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * coreset_size))
+    new_width = int(coreset_size / new_height)
+    center = (int(new_height / 2.0), int(new_width / 2.0))
+    radius = int(new_height / 2.0) if int(new_height / 2.0) > int(new_width / 2) else int(new_width / 2)
+    degree_graph = build_degrees_graph(coreset_eye_img, center, radius, min_degree=min_degree,
                                        degree_graph_fn=graph_fn, img_width=width)
 
     source = degree_graph.get_vertex(0)
@@ -700,7 +715,7 @@ def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
     print(optimal_path)
 
     angles_path = np.deg2rad(optimal_path)
-    sectors = img_to_sectors(eye_img, center, radius, angles_list=angles_path, plot_debug=False)
+    sectors = img_to_sectors(coreset_eye_img, center, radius, angles_list=angles_path, plot_debug=False)
 
     # use agglomerative clustering for the segmentation of each slice
     if agglomerative:
@@ -779,15 +794,12 @@ def unique_eye_sketch(rgb_eye_img, center, radius, agglomerative=True):
     final_img = cv2.cvtColor(final_img, cv2.COLOR_BGR2RGB)
     return final_img
 
+
 if __name__ == "__main__":
-    agglomerative = True
-    img_num = 6
-    radius = 212
-    center = (212, 179)
-
+    radius = 50
+    center = (100, 65)
     # Load eye image
-    input_img = cv2.imread(r'../images/eye%d.jpg' % img_num)
+    input_img = cv2.imread('..\images\slice-21.jpg')
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
-
-    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, center=center, radius=radius, agglomerative=True)
+    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=6000, radius=radius, agglomerative=True)
 
