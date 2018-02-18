@@ -7,6 +7,7 @@ import ab_approximation as abApproximator
 from ab_approximation import Point
 
 
+# Used to save a point's center in the cluster.
 class PointWithCenter:
     def __init__(self, index, coordinates, center, distance_from_center):
         self.coordinates = coordinates
@@ -15,6 +16,7 @@ class PointWithCenter:
         self.distance_from_center = distance_from_center
 
 
+# Used as a return value for this algorithm - a coreset point with weight.
 class CoresetPoint:
     def __init__(self, index, coordinates, weight):
         self.coordinates = coordinates
@@ -50,13 +52,14 @@ def calculate_centers_for_points(p, ab_approx):
     results[cpu_count - 2] = pool.apply_async(calculate_distances, args=(p, ab_approx, points_for_pool_count * (cpu_count - 2), len(p)))
     pool.close()
     pool.join()
-    for result in results:
+    for result in results:  # Join the results together
         points_result, cluster_sizes_result = result.get()
         points.extend(points_result)
         centers_cluster_sizes = np.add(centers_cluster_sizes, cluster_sizes_result)
     return points, centers_cluster_sizes
 
 
+# This function takes a lot of processing power. Used with multiprocessing pool.
 def calculate_distances(p, ab_approx, start_index, end_index):
     points = []
     centers_cluster_sizes = [0] * len(ab_approx)
@@ -115,17 +118,18 @@ def sample_by_probability(points, size, probability):
 
 
 def create(eye_img, height, width, k):
+    print "Starting coreset creation. This process may take some time and will not update as it will progress."
     points = []
     eps = 0.2
     delta = 3.0 / 4.0
     for i in range(0, height, 1):
         for j in range(0, width, 1):
-            points.append([i, j])
+            points.append([i, j])  # Setup coordinates for the data
     weights = np.ones(len(points), dtype=np.float64)
     new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * k))
     new_width = int(k / new_height)
     result = k_means_coreset(points, weights, k, eps, delta)
-    # sort according to square locations in matrix
+    # sort according to locations in matrix by with squares area estimations
     result.sort(key=lambda x: (int(x.coordinates[0] / new_height) * eye_img.shape[0]) + x.coordinates[1])
     coreset_eye_image = np.zeros((new_height, new_width), dtype=np.uint8)
     result_index = 0
@@ -134,4 +138,5 @@ def create(eye_img, height, width, k):
             coreset_eye_image[i][j] = eye_img[result[result_index].coordinates[0]][result[result_index].coordinates[1]]
             result_index += 1
 
+    print "Finished with coreset construction."
     return coreset_eye_image

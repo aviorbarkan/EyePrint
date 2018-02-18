@@ -118,6 +118,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
 
     results = [None] * n_points
     pool = Pool(processes=multiprocessing.cpu_count() - 1)
+    # This loop can also be converted to a map-reduce operation. This loop is what makes the algorithm work forever.
     for index in range(starting_point, ending_point, 1):
         results[index] = pool.apply_async(calculate_graph_from_degree_to_degree_parallel,
                                           args=(index, n_points, min_degree, img_width, graph, center, radius, eye_img))
@@ -127,7 +128,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
     try:
         for result in results:
             count += 1
-            graph.concat_graph(result.get())
+            graph.concat_graph(result.get())  # Joins the resulted graphs.
     except:
         print "The graph concatenation received an exception. Ony concatenated " + str(count) + "out of " + \
                 str(n_points) + ". You are probably using not enough points in the image. Try larger dataset."
@@ -680,8 +681,8 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     :return: the eye image with unique eye print segmentation
     """
 
-    width = None
-    min_degree = 6
+    width = None  # When not None, used to compress the image. doesn't work well with an already compressed image
+    min_degree = 6  # Divides each section to this amount of degrees. Increases code complexity when lower.
     sys.setrecursionlimit(2000)
     output_img_fn = 'unique_eye_sketch.png'
 
@@ -692,11 +693,12 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     sectors_fn = "../data/sectors.pkl"
     graph_fn = "../data/degrees_graph.pkl"
     path_fn = "../data/degrees_path.pkl"
-    coreset_eye_img = coreset_creator.create(eye_img, eye_img.shape[0], eye_img.shape[1], coreset_size)
-    new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * coreset_size))
-    new_width = int(coreset_size / new_height)
-    center = (int(new_height / 2.0), int(new_width / 2.0))
+    coreset_eye_img = coreset_creator.create(eye_img, eye_img.shape[0], eye_img.shape[1], coreset_size)  # Create coreset
+    new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * coreset_size))  # compressed image new height
+    new_width = int(coreset_size / new_height)  # compressed image new width
+    center = (int(new_height / 2.0), int(new_width / 2.0))  # Compressed image new center of eye image
     radius = int(new_height / 2.0) if int(new_height / 2.0) > int(new_width / 2) else int(new_width / 2)
+    # Had some trouble estimating the compressed image new eye radius. If you have a better idea - go ahead.
     degree_graph = build_degrees_graph(coreset_eye_img, center, radius, min_degree=min_degree,
                                        degree_graph_fn=graph_fn, img_width=width)
 
@@ -717,6 +719,7 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     angles_path = np.deg2rad(optimal_path)
     sectors = img_to_sectors(coreset_eye_img, center, radius, angles_list=angles_path, plot_debug=False)
 
+    # The next piece of code (if-else) needs work to make it work. Currently it throws an exception.
     # use agglomerative clustering for the segmentation of each slice
     if agglomerative:
         fig = plt.figure(figsize=(5, 5))
@@ -799,7 +802,10 @@ if __name__ == "__main__":
     radius = 50
     center = (100, 65)
     # Load eye image
-    input_img = cv2.imread('..\images\slice-21.jpg')
+    input_img = cv2.imread('..\images\slice-22.jpg')
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
+    # Don't run with coreset size less than 5000. The algorithm crashes when there's not enough points to run on.
+    # The center of the picture and the new radius are calculated within the code now according to the requested
+    # coreset size.
     eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=6000, radius=radius, agglomerative=True)
 

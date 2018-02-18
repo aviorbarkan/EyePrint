@@ -28,7 +28,7 @@ def k_means_ab_approx(points, k, eps, delta):
 def get_points_with_distances(points, centers):
     points_with_distances = []  # Points with distances from their center.
     cpu_count = multiprocessing.cpu_count()
-    results = [None] * (cpu_count - 1)
+    results = [None] * (cpu_count - 1)  # left one processor free so the pc won't die.
     pool = Pool(processes=cpu_count - 1)
     points_for_pool_count = int(len(points) / (cpu_count - 1))
     for cpu in range(0, cpu_count - 2, 1):
@@ -41,6 +41,7 @@ def get_points_with_distances(points, centers):
     return points_with_distances
 
 
+# Each call to this function takes a lot of processing power. Used with multiprocessing pool.
 def calculate_distances_parallel(points, centers):
     points_with_distances = []
     for point in points:
