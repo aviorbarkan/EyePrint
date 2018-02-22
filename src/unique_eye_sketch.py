@@ -130,7 +130,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
             count += 1
             graph.concat_graph(result.get())  # Joins the resulted graphs.
     except:
-        print "The graph concatenation received an exception. Ony concatenated " + str(count) + "out of " + \
+        print "The graph concatenation received an exception. Ony concatenated " + str(count) + " out of " + \
                 str(n_points) + ". You are probably using not enough points in the image. Try larger dataset."
 
     print("Saving to: %s" % degree_graph_fn)
@@ -672,7 +672,7 @@ def draw_lines(points_list, connect_first_and_last=False):
     plt.show()
 
 
-def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
+def unique_eye_sketch(rgb_eye_img, coreset_size, min_degree, with_coreset, agglomerative=True, width=None):
     """
     :param rgb_eye_img: and rgb eye image
     :param center: the center coordinates of the eye (x,y)
@@ -681,29 +681,36 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     :return: the eye image with unique eye print segmentation
     """
 
-    width = None  # When not None, used to compress the image. doesn't work well with an already compressed image
-    min_degree = 6  # Divides each section to this amount of degrees. Increases code complexity when lower.
-    sys.setrecursionlimit(2000)
+    print "Starting time: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    sys.setrecursionlimit(2500)
     output_img_fn = 'unique_eye_sketch.png'
 
     output_img = rgb_eye_img.copy()
-    eye_img = cv2.cvtColor(rgb_eye_img, cv2.COLOR_RGB2GRAY)
+    orig_eye_img = cv2.cvtColor(rgb_eye_img, cv2.COLOR_RGB2GRAY)
 
     # Paths for saving/loading the computed data
     sectors_fn = "../data/sectors.pkl"
     graph_fn = "../data/degrees_graph.pkl"
     path_fn = "../data/degrees_path.pkl"
-    coreset_eye_img = coreset_creator.create(eye_img, eye_img.shape[0], eye_img.shape[1], coreset_size)  # Create coreset
-    new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * coreset_size))  # compressed image new height
-    new_width = int(coreset_size / new_height)  # compressed image new width
-    center = (int(new_height / 2.0), int(new_width / 2.0))  # Compressed image new center of eye image
-    radius = int(new_height / 2.0) if int(new_height / 2.0) > int(new_width / 2) else int(new_width / 2)
-    # Had some trouble estimating the compressed image new eye radius. If you have a better idea - go ahead.
-    degree_graph = build_degrees_graph(coreset_eye_img, center, radius, min_degree=min_degree,
-                                       degree_graph_fn=graph_fn, img_width=width)
+
+    orig_center = (int(orig_eye_img.shape[1] / 2.0), int(orig_eye_img.shape[0] / 2.0))
+    orig_radius = int(orig_eye_img.shape[0] * 0.4);
+    if with_coreset is True:
+        coreset_eye_img = coreset_creator.create(orig_eye_img, orig_eye_img.shape[0], orig_eye_img.shape[1], coreset_size)  # Create coreset
+        new_height = int(math.sqrt((float(orig_eye_img.shape[0]) / orig_eye_img.shape[1]) * coreset_size))  # compressed image new height
+        new_width = int(coreset_size / new_height)  # compressed image new width
+        new_center = (int(new_width / 2.0), int(new_height / 2.0))  # Compressed image new center of eye image
+        new_radius = int(new_height * 0.4);
+        # Had some trouble estimating the compressed image new eye radius. If you have a better idea - go ahead.
+        degree_graph = build_degrees_graph(coreset_eye_img, new_center, new_radius, min_degree=min_degree,
+                                           degree_graph_fn=graph_fn, img_width=width)
+    else:
+        degree_graph = build_degrees_graph(orig_eye_img, orig_center, orig_radius, min_degree=min_degree,
+                                           degree_graph_fn=graph_fn, img_width=width)
 
     source = degree_graph.get_vertex(0)
     target = degree_graph.get_vertex(int(360 / min_degree))
+    print "Ending time: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     # Find the optimal division for the whole eye
     opt_division, opt_path_divided, opt_division_error = find_optimal_divisions_num(degree_graph, source,
                                                                                     target, display=True)
@@ -717,9 +724,9 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
     print(optimal_path)
 
     angles_path = np.deg2rad(optimal_path)
-    sectors = img_to_sectors(coreset_eye_img, center, radius, angles_list=angles_path, plot_debug=False)
+    sectors = img_to_sectors(orig_eye_img, orig_center, orig_radius, angles_list=angles_path, plot_debug=False)
 
-    # The next piece of code (if-else) needs work to make it work. Currently it throws an exception.
+    # The agglomerative algorithm needs work to make it work. Currently it throws an exception. Use the alternative.
     # use agglomerative clustering for the segmentation of each slice
     if agglomerative:
         fig = plt.figure(figsize=(5, 5))
@@ -742,7 +749,7 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
             clusters_labels = np.round(clusters_labels * 256 / max_label)
             # rotate labels to original slice position
             ang = (sector['ang2'] + sector['ang1']) / 2.0
-            M = cv2.getRotationMatrix2D(center, ang * 180 / np.pi, 1.0)
+            M = cv2.getRotationMatrix2D(orig_center, ang * 180 / np.pi, 1.0)
             labels_rotated = cv2.warpAffine(clusters_labels, M, (clusters_labels.shape[1],
                                                                  clusters_labels.shape[0]))
             labels_rotated = np.round(labels_rotated * max_label / 256)
@@ -754,8 +761,8 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
             for l in valid_labels:
                 plt.contour(labels_rotated == l, contours=1, colors='r')
 
-            ax.text(np.cos(-sector['ang_center']) * radius + center[0],
-                    np.sin(-sector['ang_center']) * radius + center[1],
+            ax.text(np.cos(-sector['ang_center']) * orig_radius + orig_center[0],
+                    np.sin(-sector['ang_center']) * orig_radius + orig_center[1],
                     '%d' % sector_ind,
                     verticalalignment='top', horizontalalignment='center',
                     color='blue', fontsize=10)
@@ -785,9 +792,9 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
 
             slice_path = cropped_slice_path + x_min_valid
             sector['path'] = slice_path
-            # Plot the final sectors of the eye
-            print('Optimal division results:')
-            plot_sectors(sectors, center=center, radius=radius, img_rgb=output_img)
+        # Plot the final sectors of the eye
+        print('Optimal division results:')
+        plot_sectors(sectors, center=orig_center, radius=orig_radius, img_rgb=output_img, output_fn=output_img_fn)
 
     print("Saving to: %s" % sectors_fn)
     with open(sectors_fn, 'wb') as f:
@@ -799,13 +806,14 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, radius, agglomerative=True):
 
 
 if __name__ == "__main__":
-    radius = 50
-    center = (100, 65)
+    width = None  # When not None, used to compress the image. doesn't work well with an already compressed image
+    min_degree = 5  # Divides each section to this amount of degrees. Increases code complexity when lower.
+
     # Load eye image
-    input_img = cv2.imread('..\images\slice-22.jpg')
+    input_img = cv2.imread('..\images\slice-21.jpg')
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
     # Don't run with coreset size less than 5000. The algorithm crashes when there's not enough points to run on.
     # The center of the picture and the new radius are calculated within the code now according to the requested
     # coreset size.
-    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=6000, radius=radius, agglomerative=True)
+    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=12000, min_degree=min_degree, with_coreset=True, agglomerative=False, width=width)
 
