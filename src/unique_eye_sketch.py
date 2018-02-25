@@ -81,7 +81,7 @@ def build_img_graph(img, valid_mask, debug=False):
 
 
 def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, img_width=None,
-                        start_at_degree=0, stop_at_degree=360, load_graph_fn=None):
+                        start_at_degree=0, stop_at_degree=360, load_graph_fn=None, coreset_resize_factor=None):
     """
     Build a graph from a given image, where the angles are the nodes
     :param eye_img: a gray-scale image
@@ -93,6 +93,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
     :param start_at_degree: for partial calculation - start computing from a certain angle
     :param stop_at_degree: for partial calculation - stop computing at a certain angle
     :param load_graph_fn: for start computing from a partially computed graph
+    :param coreset_resize_factor: calculate with coreset
     :return: the graph that was computed
     """
 
@@ -121,7 +122,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
     # This loop can also be converted to a map-reduce operation. This loop is what makes the algorithm work forever.
     for index in range(starting_point, ending_point, 1):
         results[index] = pool.apply_async(calculate_graph_from_degree_to_degree_parallel,
-                                          args=(index, n_points, min_degree, img_width, graph, center, radius, eye_img))
+                                          args=(index, n_points, min_degree, img_width, graph, center, radius, eye_img, coreset_resize_factor))
     pool.close()
     pool.join()
     count = 0
@@ -140,7 +141,7 @@ def build_degrees_graph(eye_img, center, radius, min_degree, degree_graph_fn, im
     return graph
 
 
-def calculate_graph_from_degree_to_degree_parallel(x_start, n_points, min_degree, img_width, graph, center, radius, eye_img):
+def calculate_graph_from_degree_to_degree_parallel(x_start, n_points, min_degree, img_width, graph, center, radius, eye_img, coreset_resize_factor):
     graph.add_edge(x_start, x_start, 0)
 
     for x_end in range(x_start + 1, n_points):
@@ -159,7 +160,7 @@ def calculate_graph_from_degree_to_degree_parallel(x_start, n_points, min_degree
         cropped_slice_img = slice_img[y_min_valid:y_max_valid + 1, x_min_valid:x_max_valid + 1]
         cropped_slice_valid_mask = slice_valid_mask[y_min_valid:y_max_valid + 1, x_min_valid:x_max_valid + 1]
         slice_path, slice_error = get_slice_partition(cropped_slice_img, cropped_slice_valid_mask, display=False,
-                                                      width=img_width)
+                                                      width=img_width, coreset_resize_factor=coreset_resize_factor)
         graph.add_edge(x_start, x_end, slice_error)
         graph.add_edge(x_end, x_start, np.inf)
 
@@ -243,7 +244,7 @@ def shortest_path(graph, src_node, target_node, path_length, given_weights=None,
     path = np.sort(path)
     sp_weight = weights[src_node.id, target_node.id, p_length]
 
-    # return chosen path, it's weight, all weight matrix, all possible paths matrix
+    # return chosen path, its weight, all weight matrix, all possible paths matrix
     return path, sp_weight, weights, sp
 
 
@@ -462,7 +463,7 @@ def img_to_sectors(img, center, radius, angles_list, plot_debug=False):
     return result
 
 
-def get_slice_partition(img, img_mask, display=False, width=None):
+def get_slice_partition(img, img_mask, display=False, width=None, coreset_resize_factor=None):
     """
     Given a slice image and a mask for the valid parts, returns the optimal
     partition of the slice by minimizing the errors from optimal plane, using
@@ -472,6 +473,7 @@ def get_slice_partition(img, img_mask, display=False, width=None):
     :param img_mask: mask of valid parts of the image
     :param display: show slice results
     :param width: if given - work on a resized image in the given weights
+    :param coreset_resize_factor: coreset factor for resizeing
     :return: the path (optimal division) of the original slice and the division error
     """
 
@@ -512,6 +514,9 @@ def get_slice_partition(img, img_mask, display=False, width=None):
     else:
         orig_path = np.int32(path / r)
         orig_path[-1] = (img.shape[1] - 1)
+
+    if coreset_resize_factor is not None:
+        orig_path = map(lambda x: int(x * coreset_resize_factor), orig_path)
 
     if display:
         # print the division on the image
@@ -694,19 +699,20 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, min_degree, with_coreset, agglo
     path_fn = "../data/degrees_path.pkl"
 
     orig_center = (int(orig_eye_img.shape[1] / 2.0), int(orig_eye_img.shape[0] / 2.0))
-    orig_radius = int(orig_eye_img.shape[0] * 0.4);
+    orig_radius = int(orig_eye_img.shape[0] * 0.5);
     if with_coreset is True:
         coreset_eye_img = coreset_creator.create(orig_eye_img, orig_eye_img.shape[0], orig_eye_img.shape[1], coreset_size)  # Create coreset
         new_height = int(math.sqrt((float(orig_eye_img.shape[0]) / orig_eye_img.shape[1]) * coreset_size))  # compressed image new height
         new_width = int(coreset_size / new_height)  # compressed image new width
         new_center = (int(new_width / 2.0), int(new_height / 2.0))  # Compressed image new center of eye image
-        new_radius = int(new_height * 0.4);
+        new_radius = int(new_height * 0.5)
+        coreset_resize_factor = float(orig_eye_img.shape[1]) / new_width
         # Had some trouble estimating the compressed image new eye radius. If you have a better idea - go ahead.
         degree_graph = build_degrees_graph(coreset_eye_img, new_center, new_radius, min_degree=min_degree,
-                                           degree_graph_fn=graph_fn, img_width=width)
+                                           degree_graph_fn=graph_fn, img_width=width, coreset_resize_factor=coreset_resize_factor)
     else:
         degree_graph = build_degrees_graph(orig_eye_img, orig_center, orig_radius, min_degree=min_degree,
-                                           degree_graph_fn=graph_fn, img_width=width)
+                                           degree_graph_fn=graph_fn, img_width=width, coreset_resize_factor=None)
 
     source = degree_graph.get_vertex(0)
     target = degree_graph.get_vertex(int(360 / min_degree))
@@ -725,6 +731,7 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, min_degree, with_coreset, agglo
 
     angles_path = np.deg2rad(optimal_path)
     sectors = img_to_sectors(orig_eye_img, orig_center, orig_radius, angles_list=angles_path, plot_debug=False)
+    time.sleep(0.5)
 
     # The agglomerative algorithm needs work to make it work. Currently it throws an exception. Use the alternative.
     # use agglomerative clustering for the segmentation of each slice
@@ -806,14 +813,17 @@ def unique_eye_sketch(rgb_eye_img, coreset_size, min_degree, with_coreset, agglo
 
 
 if __name__ == "__main__":
-    width = None  # When not None, used to compress the image. doesn't work well with an already compressed image
-    min_degree = 5  # Divides each section to this amount of degrees. Increases code complexity when lower.
+    width = 16  # Adjust the size of slices with this factor. Use None for default run.
+    min_degree = 6  # Divides each section to this amount of degrees. Increases code complexity when lower.
 
     # Load eye image
-    input_img = cv2.imread('..\images\slice-21.jpg')
+    input_img = cv2.imread('..\images\image3.jpg')
     img_rgb = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
-    # Don't run with coreset size less than 5000. The algorithm crashes when there's not enough points to run on.
-    # The center of the picture and the new radius are calculated within the code now according to the requested
-    # coreset size.
-    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=12000, min_degree=min_degree, with_coreset=True, agglomerative=False, width=width)
+    # Coreset with size less than 10000 won't yield good results.
+    # Coresets with size less than 1000 will likely crash. If you want to debug there's an option for that in the coreset creator.
+    # The center of the picture and the radius are now calculated as the middle of the picture to its edge. Crop the eye
+    # image as in image3 or image4 for this parameters to work, or change the center and radius in the code to include
+    # only the part of the eye that matters.
+
+    eye_img = unique_eye_sketch(rgb_eye_img=img_rgb, coreset_size=10000, min_degree=min_degree, with_coreset=False, agglomerative=False, width=width)
 

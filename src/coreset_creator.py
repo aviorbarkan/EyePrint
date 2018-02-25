@@ -129,8 +129,9 @@ def create(eye_img, height, width, k):
     new_height = int(math.sqrt((float(eye_img.shape[0]) / eye_img.shape[1]) * k))
     new_width = int(k / new_height)
     result = k_means_coreset(points, weights, k, eps, delta)
+    # result = mock_coreset(new_height, new_width, eye_img.shape[1])  # Use only to debug
     # sort according to locations in matrix by with squares area estimations
-    result.sort(key=lambda x: (int(x.coordinates[0] / new_height) * eye_img.shape[0]) + x.coordinates[1])
+    result.sort(key=lambda x: (x.coordinates[0] + int(x.coordinates[1] / new_width) * eye_img.shape[1]))
     coreset_eye_image = np.zeros((new_height, new_width), dtype=np.uint8)
     result_index = 0
     for i in range(0, new_height, 1):
@@ -140,3 +141,14 @@ def create(eye_img, height, width, k):
 
     print "Finished with coreset construction."
     return coreset_eye_image
+
+
+def mock_coreset(new_height, new_width, old_width):  # Use this function instead of k_means_coreset to debug other parts of the code.
+    result = []
+    index = 0
+    factor = old_width / float(new_width)
+    for i in range(0, new_height, 1):
+        for j in range(0, new_width, 1):
+            result.append(Point(index, [int(i * factor + factor / 2.0), int(j * factor + factor / 2.0)]))
+            index = index + 1
+    return result
